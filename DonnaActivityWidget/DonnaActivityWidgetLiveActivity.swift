@@ -64,7 +64,12 @@ struct DonnaRecordingLiveActivity: Widget {
             HStack {
                 Image(systemName: "mic.fill")
                     .foregroundColor(.red)
-                Text("Recording...")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recording...")
+                    Text("Tap to stop")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
                 Text(formatDuration(context.state.duration))
                     .monospacedDigit()
@@ -72,17 +77,34 @@ struct DonnaRecordingLiveActivity: Widget {
             .padding()
             .activityBackgroundTint(Color.black)
             .activitySystemActionForegroundColor(Color.white)
+            .widgetURL(URL(string: "donna://stopRecording"))
 
         } dynamicIsland: { context in
             DynamicIsland {
                 // Expanded UI
                 DynamicIslandExpandedRegion(.center) {
-                    HStack {
-                        Image(systemName: "mic.fill")
-                            .foregroundColor(.red)
-                            .font(.title2)
-                        Text("Recording")
-                            .font(.headline)
+                    VStack(spacing: 12) {
+                        HStack {
+                            Image(systemName: "mic.fill")
+                                .foregroundColor(.red)
+                                .font(.title2)
+                            Text("Recording")
+                                .font(.headline)
+                        }
+                        
+                        // Audio level indicator
+                        Capsule()
+                            .fill(context.state.audioLevel > 0.7 ? .orange : .green)
+                            .frame(width: 60 * context.state.audioLevel, height: 6)
+                            .animation(.easeInOut(duration: 0.1), value: context.state.audioLevel)
+                            .frame(maxWidth: 60, alignment: .leading)
+                            .background(
+                                Capsule().fill(Color.gray.opacity(0.3))
+                            )
+                        
+                        Text("Tap to stop")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {

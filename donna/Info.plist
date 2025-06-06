@@ -14,5 +14,14 @@
 	<string>Donna converts speech to text on-device for processing your notes</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>donna</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

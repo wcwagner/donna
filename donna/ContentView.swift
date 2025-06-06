@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import AVFoundation
+import AVKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -52,6 +53,18 @@ struct ContentView: View {
         .onAppear(perform: loadRecordings)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             updateRecordingState()
+            // Reload recordings periodically to catch new ones
+            if !isRecording {
+                loadRecordings()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // Reload when app comes to foreground
+            loadRecordings()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .donnaRecordingFinished)) { _ in
+            loadRecordings()
+            isRecording = false            // toolbar badge off
         }
     }
     
@@ -63,11 +76,6 @@ struct ContentView: View {
             AudioRecordingManager.shared.startRecording(activityId: recordingId)
         }
         updateRecordingState()
-        
-        // Reload recordings after a delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            loadRecordings()
-        }
     }
     
     private func updateRecordingState() {
@@ -85,9 +93,14 @@ struct ContentView: View {
                 guard url.pathExtension == "m4a" else { return nil }
                 let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
                 let creationDate = attributes?[.creationDate] as? Date ?? Date()
+                
+                let asset    = AVURLAsset(url: url)
+                let duration = CMTimeGetSeconds(asset.duration)
+                
                 return RecordingFile(id: url.deletingPathExtension().lastPathComponent,
-                                   url: url,
-                                   creationDate: creationDate)
+                                     url: url,
+                                     creationDate: creationDate,
+                                     duration: duration)
             }
             .sorted { $0.creationDate > $1.creationDate }
         } catch {
@@ -108,21 +121,28 @@ struct RecordingFile: Identifiable {
     let id: String
     let url: URL
     let creationDate: Date
+    let duration: TimeInterval      // ← new
 }
 
 struct RecordingRow: View {
     let recording: RecordingFile
     @State private var isPlaying = false
     @State private var audioPlayer: AVAudioPlayer?
+    @State private var audioDelegate: AudioPlayerDelegate?
+    @State private var playbackFinished = false
     
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
                 Text(recording.creationDate, style: .date)
                     .font(.headline)
-                Text(recording.creationDate, style: .time)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                HStack {
+                    Text(recording.creationDate, style: .time)
+                    Text("·")
+                    Text(formatTime(recording.duration))
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
             
             Spacer()
@@ -134,24 +154,47 @@ struct RecordingRow: View {
             }
         }
         .padding(.vertical, 4)
+        .onChange(of: playbackFinished) { finished in
+            if finished {
+                isPlaying = false
+                audioPlayer = nil
+                audioDelegate = nil
+                playbackFinished = false
+            }
+        }
     }
     
     private func togglePlayback() {
         if isPlaying {
             audioPlayer?.stop()
             isPlaying = false
+            audioPlayer = nil
         } else {
             do {
+                // Configure audio session for playback
+                let audioSession = AVAudioSession.sharedInstance()
+                try audioSession.setCategory(.playback, mode: .default)
+                try audioSession.setActive(true)
+                
                 audioPlayer = try AVAudioPlayer(contentsOf: recording.url)
-                audioPlayer?.delegate = AudioPlayerDelegate { [self] in
-                    isPlaying = false
+                let delegate = AudioPlayerDelegate { 
+                    DispatchQueue.main.async {
+                        playbackFinished = true
+                    }
                 }
+                audioDelegate = delegate
+                audioPlayer?.delegate = audioDelegate
+                audioPlayer?.prepareToPlay()
                 audioPlayer?.play()
                 isPlaying = true
             } catch {
                 print("Failed to play audio: \(error)")
             }
         }
+    }
+    
+    private func formatTime(_ t: TimeInterval) -> String {
+        String(format: "%d:%02d", Int(t)/60, Int(t)%60)
     }
 }
 
@@ -160,6 +203,7 @@ class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
     
     init(completion: @escaping () -> Void) {
         self.completion = completion
+        super.init()
     }
     
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {

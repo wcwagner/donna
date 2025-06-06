@@ -73,6 +73,7 @@ struct AppGroupConfig {
 import SwiftUI
 import SwiftData
 import AVFoundation
+import AVKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -117,6 +118,18 @@ struct ContentView: View {
         .onAppear(perform: loadRecordings)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             updateRecordingState()
+            // Reload recordings periodically to catch new ones
+            if !isRecording {
+                loadRecordings()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // Reload when app comes to foreground
+            loadRecordings()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .donnaRecordingFinished)) { _ in
+            loadRecordings()
+            isRecording = false            // toolbar badge off
         }
     }
     
@@ -128,11 +141,6 @@ struct ContentView: View {
             AudioRecordingManager.shared.startRecording(activityId: recordingId)
         }
         updateRecordingState()
-        
-        // Reload recordings after a delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            loadRecordings()
-        }
     }
     
     private func updateRecordingState() {
@@ -150,9 +158,14 @@ struct ContentView: View {
                 guard url.pathExtension == "m4a" else { return nil }
                 let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
                 let creationDate = attributes?[.creationDate] as? Date ?? Date()
+                
+                let asset    = AVURLAsset(url: url)
+                let duration = CMTimeGetSeconds(asset.duration)
+                
                 return RecordingFile(id: url.deletingPathExtension().lastPathComponent,
-                                   url: url,
-                                   creationDate: creationDate)
+                                     url: url,
+                                     creationDate: creationDate,
+                                     duration: duration)
             }
             .sorted { $0.creationDate > $1.creationDate }
         } catch {
@@ -173,21 +186,28 @@ struct RecordingFile: Identifiable {
     let id: String
     let url: URL
     let creationDate: Date
+    let duration: TimeInterval      // ← new
 }
 
 struct RecordingRow: View {
     let recording: RecordingFile
     @State private var isPlaying = false
     @State private var audioPlayer: AVAudioPlayer?
+    @State private var audioDelegate: AudioPlayerDelegate?
+    @State private var playbackFinished = false
     
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
                 Text(recording.creationDate, style: .date)
                     .font(.headline)
-                Text(recording.creationDate, style: .time)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                HStack {
+                    Text(recording.creationDate, style: .time)
+                    Text("·")
+                    Text(formatTime(recording.duration))
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
             
             Spacer()
@@ -199,24 +219,47 @@ struct RecordingRow: View {
             }
         }
         .padding(.vertical, 4)
+        .onChange(of: playbackFinished) { finished in
+            if finished {
+                isPlaying = false
+                audioPlayer = nil
+                audioDelegate = nil
+                playbackFinished = false
+            }
+        }
     }
     
     private func togglePlayback() {
         if isPlaying {
             audioPlayer?.stop()
             isPlaying = false
+            audioPlayer = nil
         } else {
             do {
+                // Configure audio session for playback
+                let audioSession = AVAudioSession.sharedInstance()
+                try audioSession.setCategory(.playback, mode: .default)
+                try audioSession.setActive(true)
+                
                 audioPlayer = try AVAudioPlayer(contentsOf: recording.url)
-                audioPlayer?.delegate = AudioPlayerDelegate { [self] in
-                    isPlaying = false
+                let delegate = AudioPlayerDelegate { 
+                    DispatchQueue.main.async {
+                        playbackFinished = true
+                    }
                 }
+                audioDelegate = delegate
+                audioPlayer?.delegate = audioDelegate
+                audioPlayer?.prepareToPlay()
                 audioPlayer?.play()
                 isPlaying = true
             } catch {
                 print("Failed to play audio: \(error)")
             }
         }
+    }
+    
+    private func formatTime(_ t: TimeInterval) -> String {
+        String(format: "%d:%02d", Int(t)/60, Int(t)%60)
     }
 }
 
@@ -225,6 +268,7 @@ class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
     
     init(completion: @escaping () -> Void) {
         self.completion = completion
+        super.init()
     }
     
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -240,35 +284,6 @@ class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
 </document_content>
 </document>
 <document index="4">
-<source>./donna/DonnaRecordingAttributes.swift</source>
-<document_content>
-//
-//  DonnaRecordingAttributes.swift
-//  donna
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import ActivityKit
-import Foundation
-
-// Recording-specific Live Activity attributes (shared between app and widget)
-public struct DonnaRecordingAttributes: ActivityAttributes {
-    public struct ContentState: Codable, Hashable, Equatable {
-        public var isRecording: Bool
-        public var duration: TimeInterval
-        
-        public init(isRecording: Bool, duration: TimeInterval) {
-            self.isRecording = isRecording
-            self.duration = duration
-        }
-    }
-    
-    public init() {}
-}
-</document_content>
-</document>
-<document index="5">
 <source>./donna/Info.plist</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -287,12 +302,21 @@ public struct DonnaRecordingAttributes: ActivityAttributes {
 	<string>Donna converts speech to text on-device for processing your notes</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>donna</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
 
 </document_content>
 </document>
-<document index="6">
+<document index="5">
 <source>./donna/Item.swift</source>
 <document_content>
 //
@@ -316,7 +340,7 @@ final class Item {
 
 </document_content>
 </document>
-<document index="7">
+<document index="6">
 <source>./donna/RecordNoteIntent.swift</source>
 <document_content>
 //
@@ -332,7 +356,7 @@ import AVFoundation
 import SwiftUI
 import Foundation
 
-struct RecordNoteIntent: AudioStartingIntent {
+struct RecordNoteIntent: AudioRecordingIntent, LiveActivityIntent {
     static var title: LocalizedStringResource = "Donna note"
     static var description = IntentDescription("Start recording a note with Donna")
     
@@ -402,6 +426,7 @@ class AudioRecordingManager: NSObject {
     private var recordingTimer: Timer?
     private var currentActivityId: String?
     private var recordingStartTime: Date?
+    private var smoothedLevel: Double = 0   // 0‥1 linear
     
     var isRecording: Bool {
         return audioRecorder?.isRecording ?? false
@@ -416,12 +441,24 @@ class AudioRecordingManager: NSObject {
         setupAudioSession()
     }
     
+    private func linearLevel() -> Double {
+        audioRecorder?.updateMeters()
+        let db = audioRecorder?.averagePower(forChannel: 0) ?? -160
+        let level = pow(10, Double(db) / 20)            // log → linear
+        // One-pole low-pass filter (Voice-Memos-style)
+        smoothedLevel = 0.2 * level + 0.8 * smoothedLevel
+        return smoothedLevel
+    }
+    
     private func setupAudioSession() {
-        let audioSession = AVAudioSession.sharedInstance()
+        let s = AVAudioSession.sharedInstance()
         do {
-            try audioSession.setCategory(.record, mode: .default)
-            try audioSession.setActive(true)
-            print("[AudioRecordingManager] Audio session configured")
+            try s.setCategory(.playAndRecord,
+                              mode: .default,
+                              options: [.mixWithOthers, .defaultToSpeaker])
+            try s.setAllowHapticsAndSystemSoundsDuringRecording(true)
+            try s.setActive(true)
+            print("[AudioRecordingManager] Audio session configured for background mixing")
         } catch {
             print("[AudioRecordingManager] Failed to set up audio session: \(error)")
         }
@@ -450,9 +487,10 @@ class AudioRecordingManager: NSObject {
             audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
             audioRecorder?.delegate = self
             audioRecorder?.isMeteringEnabled = true
+            audioRecorder?.prepareToRecord()
             audioRecorder?.record()
             
-            print("[AudioRecordingManager] Recording started at: \(audioFilename)")
+            print("[AudioRecordingManager] Recording started")
             
             // Start monitoring for silence
             startSilenceDetection()
@@ -463,26 +501,22 @@ class AudioRecordingManager: NSObject {
     }
     
     private func startSilenceDetection() {
-        // Just update duration, no silence detection
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            
-            // Update Live Activity duration
-            if let startTime = self.recordingStartTime,
-               let activityId = self.currentActivityId {
-                let duration = Date().timeIntervalSince(startTime)
-                Task {
-                    await self.updateLiveActivity(activityId: activityId, duration: duration)
-                }
-            }
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25,
+                                              repeats: true) { [weak self] _ in
+            guard let self, let start = self.recordingStartTime else { return }
+            let dur = Date().timeIntervalSince(start)
+            Task { await self.updateLiveActivity(duration: dur,
+                                                 audioLevel: self.linearLevel()) }
         }
     }
     
     @MainActor
-    private func updateLiveActivity(activityId: String, duration: TimeInterval) async {
+    private func updateLiveActivity(duration: TimeInterval, audioLevel: Double = 0.0) async {
+        guard let activityId = currentActivityId else { return }
         let updatedState = DonnaRecordingAttributes.ContentState(
             isRecording: true,
-            duration: duration
+            duration: duration,
+            audioLevel: audioLevel
         )
         
         let activities = Activity<DonnaRecordingAttributes>.activities
@@ -504,7 +538,7 @@ class AudioRecordingManager: NSObject {
         // End Live Activity
         if let activityId = currentActivityId {
             Task {
-                await endLiveActivity(activityId: activityId)
+                await endLiveActivity(activityId)
             }
         }
         
@@ -521,20 +555,35 @@ class AudioRecordingManager: NSObject {
     }
     
     @MainActor
-    private func endLiveActivity(activityId: String) async {
-        let activities = Activity<DonnaRecordingAttributes>.activities
-        if let activity = activities.first(where: { $0.id == activityId }) {
-            await activity.end(nil, dismissalPolicy: .immediate)
-        }
+    private func endLiveActivity(_ id: String) async {
+        guard let activity = Activity<DonnaRecordingAttributes>
+                .activities.first(where: { $0.id == id }) else { return }
+
+        let stopState = DonnaRecordingAttributes.ContentState(
+            isRecording: false,
+            duration: activity.content.state.duration,
+            audioLevel: 0
+        )
+
+        await activity.update(ActivityContent(state: stopState, staleDate: nil))
+        try? await Task.sleep(for: .seconds(0.5))   // keep mic dot visible
+        await activity.end(dismissalPolicy: .immediate)
     }
 }
 
 extension AudioRecordingManager: AVAudioRecorderDelegate {
-    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        if flag {
-            print("[AudioRecordingManager] Recording finished successfully")
-        }
+    func audioRecorderDidFinishRecording(_ r: AVAudioRecorder,
+                                         successfully flag: Bool) {
+        guard flag else { return }
+        NotificationCenter.default.post(
+            name: .donnaRecordingFinished,
+            object: r.url
+        )
     }
+}
+
+extension Notification.Name {
+    static let donnaRecordingFinished = Self("donnaRecordingFinished")
 }
 
 // App Shortcut for Action Button
@@ -552,35 +601,10 @@ struct DonnaShortcuts: AppShortcutsProvider {
         )
     }
 }
+
 </document_content>
 </document>
-<document index="8">
-<source>./donna/StopRecordingIntent.swift</source>
-<document_content>
-//
-//  StopRecordingIntent.swift
-//  donna
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import AppIntents
-
-struct StopRecordingIntent: AppIntent {
-    static var title: LocalizedStringResource = "Stop Recording"
-    static var description = IntentDescription("Stop the current recording")
-    
-    static var openAppWhenRun: Bool = false
-    
-    func perform() async throws -> some IntentResult {
-        print("[StopRecordingIntent] Stopping recording")
-        AudioRecordingManager.shared.stopRecording()
-        return .result()
-    }
-}
-</document_content>
-</document>
-<document index="9">
+<document index="7">
 <source>./donna/donna.entitlements</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -600,7 +624,7 @@ struct StopRecordingIntent: AppIntent {
 
 </document_content>
 </document>
-<document index="10">
+<document index="8">
 <source>./donna/donnaApp.swift</source>
 <document_content>
 //
@@ -613,6 +637,7 @@ struct StopRecordingIntent: AppIntent {
 import SwiftUI
 import SwiftData
 import AppIntents
+import Foundation
 
 @main
 struct donnaApp: App {
@@ -630,13 +655,27 @@ struct donnaApp: App {
     }()
     
     init() {
-        // Register shortcuts
-        print("[donnaApp] App initialized, shortcuts registered")
+        print("[donnaApp] App initialized")
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                AudioRecordingManager.shared.stopRecording()
+            },
+            "DonnaRecordingStopped" as CFString,
+            nil,
+            .deliverImmediately
+        )
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onOpenURL { url in
+                    if url.absoluteString == "donna://stopRecording" {
+                        AudioRecordingManager.shared.stopRecording()
+                    }
+                }
         }
         .modelContainer(sharedModelContainer)
     }
@@ -644,7 +683,7 @@ struct donnaApp: App {
 
 </document_content>
 </document>
-<document index="11">
+<document index="9">
 <source>./donna.xcodeproj/xcuserdata/williamwagner.xcuserdatad/xcschemes/xcschememanagement.plist</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -656,12 +695,12 @@ struct donnaApp: App {
 		<key>DonnaActivityWidgetExtension.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>1</integer>
+			<integer>0</integer>
 		</dict>
 		<key>donna.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>0</integer>
+			<integer>1</integer>
 		</dict>
 	</dict>
 </dict>
@@ -669,7 +708,64 @@ struct donnaApp: App {
 
 </document_content>
 </document>
-<document index="12">
+<document index="10">
+<source>./Shared/SharedTypes.swift</source>
+<document_content>
+//
+//  SharedTypes.swift
+//  Shared
+//
+//  Created by William Wagner on 6/5/25.
+//
+
+import ActivityKit
+import Foundation
+import AppIntents
+
+// MARK: - Live Activity Attributes
+
+public struct DonnaRecordingAttributes: ActivityAttributes {
+
+    public struct ContentState: Codable, Hashable {
+        public var isRecording: Bool
+        public var duration: TimeInterval
+        public var audioLevel: Double     // ← for waveform 0‥1
+
+        public init(isRecording: Bool,
+                    duration: TimeInterval,
+                    audioLevel: Double = 0) {
+            self.isRecording = isRecording
+            self.duration    = duration
+            self.audioLevel  = audioLevel
+        }
+    }
+
+    public init() {}
+}
+
+// MARK: - Shared Intents
+
+public struct StopRecordingIntent: AppIntent {
+    public static var title: LocalizedStringResource = "Stop Recording"
+    public static var description = IntentDescription("Stop the current recording")
+    
+    public static var openAppWhenRun: Bool = false
+    
+    public init() {}
+    
+    public func perform() async throws -> some IntentResult {
+        // Post Darwin notification that both app and widget can listen to
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("DonnaRecordingStopped" as CFString),
+            nil, nil, true
+        )
+        return .result()
+    }
+}
+</document_content>
+</document>
+<document index="11">
 <source>./donnaUITests/donnaUITests.swift</source>
 <document_content>
 //
@@ -716,7 +812,7 @@ final class donnaUITests: XCTestCase {
 
 </document_content>
 </document>
-<document index="13">
+<document index="12">
 <source>./donnaUITests/donnaUITestsLaunchTests.swift</source>
 <document_content>
 //
@@ -755,7 +851,7 @@ final class donnaUITestsLaunchTests: XCTestCase {
 
 </document_content>
 </document>
-<document index="14">
+<document index="13">
 <source>./DonnaActivityWidget/AppIntent.swift</source>
 <document_content>
 //
@@ -779,7 +875,7 @@ struct ConfigurationAppIntent: WidgetConfigurationIntent {
 
 </document_content>
 </document>
-<document index="15">
+<document index="14">
 <source>./DonnaActivityWidget/DonnaActivityWidget.entitlements</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -796,7 +892,7 @@ struct ConfigurationAppIntent: WidgetConfigurationIntent {
 </plist>
 </document_content>
 </document>
-<document index="16">
+<document index="15">
 <source>./DonnaActivityWidget/DonnaActivityWidget.swift</source>
 <document_content>
 //
@@ -890,7 +986,7 @@ extension ConfigurationAppIntent {
 
 </document_content>
 </document>
-<document index="17">
+<document index="16">
 <source>./DonnaActivityWidget/DonnaActivityWidgetBundle.swift</source>
 <document_content>
 //
@@ -916,7 +1012,7 @@ struct DonnaActivityWidgetBundle: WidgetBundle {
 
 </document_content>
 </document>
-<document index="18">
+<document index="17">
 <source>./DonnaActivityWidget/DonnaActivityWidgetControl.swift</source>
 <document_content>
 //
@@ -999,7 +1095,7 @@ struct StartTimerIntent: SetValueIntent {
 
 </document_content>
 </document>
-<document index="19">
+<document index="18">
 <source>./DonnaActivityWidget/DonnaActivityWidgetLiveActivity.swift</source>
 <document_content>
 //
@@ -1068,7 +1164,12 @@ struct DonnaRecordingLiveActivity: Widget {
             HStack {
                 Image(systemName: "mic.fill")
                     .foregroundColor(.red)
-                Text("Recording...")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recording...")
+                    Text("Tap to stop")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
                 Text(formatDuration(context.state.duration))
                     .monospacedDigit()
@@ -1076,17 +1177,34 @@ struct DonnaRecordingLiveActivity: Widget {
             .padding()
             .activityBackgroundTint(Color.black)
             .activitySystemActionForegroundColor(Color.white)
+            .widgetURL(URL(string: "donna://stopRecording"))
 
         } dynamicIsland: { context in
             DynamicIsland {
                 // Expanded UI
                 DynamicIslandExpandedRegion(.center) {
-                    HStack {
-                        Image(systemName: "mic.fill")
-                            .foregroundColor(.red)
-                            .font(.title2)
-                        Text("Recording")
-                            .font(.headline)
+                    VStack(spacing: 12) {
+                        HStack {
+                            Image(systemName: "mic.fill")
+                                .foregroundColor(.red)
+                                .font(.title2)
+                            Text("Recording")
+                                .font(.headline)
+                        }
+                        
+                        // Audio level indicator
+                        Capsule()
+                            .fill(context.state.audioLevel > 0.7 ? .orange : .green)
+                            .frame(width: 60 * context.state.audioLevel, height: 6)
+                            .animation(.easeInOut(duration: 0.1), value: context.state.audioLevel)
+                            .frame(maxWidth: 60, alignment: .leading)
+                            .background(
+                                Capsule().fill(Color.gray.opacity(0.3))
+                            )
+                        
+                        Text("Tap to stop")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -1141,36 +1259,7 @@ extension DonnaActivityWidgetAttributes.ContentState {
 
 </document_content>
 </document>
-<document index="20">
-<source>./DonnaActivityWidget/DonnaRecordingAttributes.swift</source>
-<document_content>
-//
-//  DonnaRecordingAttributes.swift
-//  DonnaActivityWidget
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import ActivityKit
-import Foundation
-
-// Recording-specific Live Activity attributes (shared between app and widget)
-public struct DonnaRecordingAttributes: ActivityAttributes {
-    public struct ContentState: Codable, Hashable, Equatable {
-        public var isRecording: Bool
-        public var duration: TimeInterval
-        
-        public init(isRecording: Bool, duration: TimeInterval) {
-            self.isRecording = isRecording
-            self.duration = duration
-        }
-    }
-    
-    public init() {}
-}
-</document_content>
-</document>
-<document index="21">
+<document index="19">
 <source>./DonnaActivityWidget/Info.plist</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1195,7 +1284,7 @@ public struct DonnaRecordingAttributes: ActivityAttributes {
 
 </document_content>
 </document>
-<document index="22">
+<document index="20">
 <source>./donnaTests/donnaTests.swift</source>
 <document_content>
 //

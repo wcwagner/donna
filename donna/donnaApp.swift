@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import AppIntents
+import Foundation
 
 @main
 struct donnaApp: App {
@@ -25,13 +26,27 @@ struct donnaApp: App {
     }()
     
     init() {
-        // Register shortcuts
-        print("[donnaApp] App initialized, shortcuts registered")
+        print("[donnaApp] App initialized")
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                AudioRecordingManager.shared.stopRecording()
+            },
+            "DonnaRecordingStopped" as CFString,
+            nil,
+            .deliverImmediately
+        )
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onOpenURL { url in
+                    if url.absoluteString == "donna://stopRecording" {
+                        AudioRecordingManager.shared.stopRecording()
+                    }
+                }
         }
         .modelContainer(sharedModelContainer)
     }

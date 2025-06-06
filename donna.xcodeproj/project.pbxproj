@@ -10,6 +10,8 @@
 		6AA4A3502DF28BB100AE8AA3 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6AA4A34F2DF28BB100AE8AA3 /* WidgetKit.framework */; };
 		6AA4A3522DF28BB100AE8AA3 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6AA4A3512DF28BB100AE8AA3 /* SwiftUI.framework */; };
 		6AA4A3632DF28BB200AE8AA3 /* DonnaActivityWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6AA4A34D2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		6AA4A3842DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */; };
+		6AA4A3852DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +59,7 @@
 		6AA4A34D2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DonnaActivityWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6AA4A34F2DF28BB100AE8AA3 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		6AA4A3512DF28BB100AE8AA3 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedTypes.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -142,6 +145,7 @@
 		6AA3E7C82DF2817A0040A8C1 = {
 			isa = PBXGroup;
 			children = (
+				6AA4A37F2DF2A93400AE8AA3 /* Shared */,
 				6AA3E7D32DF2817A0040A8C1 /* donna */,
 				6AA3E7E52DF2817C0040A8C1 /* donnaTests */,
 				6AA3E7EF2DF2817C0040A8C1 /* donnaUITests */,
@@ -169,6 +173,14 @@
 				6AA4A3512DF28BB100AE8AA3 /* SwiftUI.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		6AA4A37F2DF2A93400AE8AA3 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -301,6 +313,9 @@
 			);
 			mainGroup = 6AA3E7C82DF2817A0040A8C1;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				6AA4A37C2DF2A7E900AE8AA3 /* XCLocalSwiftPackageReference "DonnaShared" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 6AA3E7D22DF2817A0040A8C1 /* Products */;
 			projectDirPath = "";
@@ -350,6 +365,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6AA4A3842DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -371,6 +387,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6AA4A3852DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -745,6 +762,13 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		6AA4A37C2DF2A7E900AE8AA3 /* XCLocalSwiftPackageReference "DonnaShared" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = DonnaShared;
+		};
+/* End XCLocalSwiftPackageReference section */
 	};
 	rootObject = 6AA3E7C92DF2817A0040A8C1 /* Project object */;
 }
