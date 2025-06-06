@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppIntents
 
 @main
 struct donnaApp: App {
@@ -22,6 +23,11 @@ struct donnaApp: App {
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
+    
+    init() {
+        // Register shortcuts
+        print("[donnaApp] App initialized, shortcuts registered")
+    }
 
     var body: some Scene {
         WindowGroup {

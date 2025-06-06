@@ -56,6 +56,62 @@ struct DonnaActivityWidgetLiveActivity: Widget {
     }
 }
 
+// Recording Live Activity
+struct DonnaRecordingLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: DonnaRecordingAttributes.self) { context in
+            // Lock screen/banner UI goes here
+            HStack {
+                Image(systemName: "mic.fill")
+                    .foregroundColor(.red)
+                Text("Recording...")
+                Spacer()
+                Text(formatDuration(context.state.duration))
+                    .monospacedDigit()
+            }
+            .padding()
+            .activityBackgroundTint(Color.black)
+            .activitySystemActionForegroundColor(Color.white)
+
+        } dynamicIsland: { context in
+            DynamicIsland {
+                // Expanded UI
+                DynamicIslandExpandedRegion(.center) {
+                    HStack {
+                        Image(systemName: "mic.fill")
+                            .foregroundColor(.red)
+                            .font(.title2)
+                        Text("Recording")
+                            .font(.headline)
+                    }
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    Text(formatDuration(context.state.duration))
+                        .font(.largeTitle)
+                        .monospacedDigit()
+                }
+            } compactLeading: {
+                Image(systemName: "mic.fill")
+                    .foregroundColor(.red)
+            } compactTrailing: {
+                Text(formatDuration(context.state.duration))
+                    .monospacedDigit()
+                    .frame(minWidth: 45)
+            } minimal: {
+                Image(systemName: "mic.fill")
+                    .foregroundColor(.red)
+            }
+            .keylineTint(Color.red)
+        }
+    }
+    
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
 extension DonnaActivityWidgetAttributes {
     fileprivate static var preview: DonnaActivityWidgetAttributes {
         DonnaActivityWidgetAttributes(name: "World")

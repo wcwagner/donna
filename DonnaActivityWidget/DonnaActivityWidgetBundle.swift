@@ -7,6 +7,7 @@
 
 import WidgetKit
 import SwiftUI
+import AppIntents
 
 @main
 struct DonnaActivityWidgetBundle: WidgetBundle {
@@ -14,5 +15,6 @@ struct DonnaActivityWidgetBundle: WidgetBundle {
         DonnaActivityWidget()
         DonnaActivityWidgetControl()
         DonnaActivityWidgetLiveActivity()
+        DonnaRecordingLiveActivity()
     }
 }

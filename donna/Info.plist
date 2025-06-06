@@ -8,5 +8,11 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Donna needs microphone access to record your notes and reminders</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Donna converts speech to text on-device for processing your notes</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 </dict>
 </plist>
