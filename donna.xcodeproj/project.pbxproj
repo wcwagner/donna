@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		6AA4A3502DF28BB100AE8AA3 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6AA4A34F2DF28BB100AE8AA3 /* WidgetKit.framework */; };
+		6AA4A3522DF28BB100AE8AA3 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6AA4A3512DF28BB100AE8AA3 /* SwiftUI.framework */; };
+		6AA4A3632DF28BB200AE8AA3 /* DonnaActivityWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6AA4A34D2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		6AA3E7E32DF2817C0040A8C1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,12 +27,36 @@
 			remoteGlobalIDString = 6AA3E7D02DF2817A0040A8C1;
 			remoteInfo = donna;
 		};
+		6AA4A3612DF28BB200AE8AA3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6AA3E7C92DF2817A0040A8C1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6AA4A34C2DF28BB100AE8AA3;
+			remoteInfo = DonnaActivityWidgetExtension;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		6AA4A3682DF28BB200AE8AA3 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				6AA4A3632DF28BB200AE8AA3 /* DonnaActivityWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		6AA3E7D12DF2817A0040A8C1 /* donna.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = donna.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6AA3E7E22DF2817C0040A8C1 /* donnaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = donnaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6AA3E7EC2DF2817C0040A8C1 /* donnaUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = donnaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6AA4A34D2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DonnaActivityWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		6AA4A34F2DF28BB100AE8AA3 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		6AA4A3512DF28BB100AE8AA3 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -36,6 +66,13 @@
 				Info.plist,
 			);
 			target = 6AA3E7D02DF2817A0040A8C1 /* donna */;
+		};
+		6AA4A3672DF28BB200AE8AA3 /* Exceptions for "DonnaActivityWidget" folder in "DonnaActivityWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 6AA4A34C2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -56,6 +93,14 @@
 		6AA3E7EF2DF2817C0040A8C1 /* donnaUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = donnaUITests;
+			sourceTree = "<group>";
+		};
+		6AA4A3532DF28BB100AE8AA3 /* DonnaActivityWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				6AA4A3672DF28BB200AE8AA3 /* Exceptions for "DonnaActivityWidget" folder in "DonnaActivityWidgetExtension" target */,
+			);
+			path = DonnaActivityWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -82,6 +127,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6AA4A34A2DF28BB100AE8AA3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6AA4A3522DF28BB100AE8AA3 /* SwiftUI.framework in Frameworks */,
+				6AA4A3502DF28BB100AE8AA3 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -91,6 +145,8 @@
 				6AA3E7D32DF2817A0040A8C1 /* donna */,
 				6AA3E7E52DF2817C0040A8C1 /* donnaTests */,
 				6AA3E7EF2DF2817C0040A8C1 /* donnaUITests */,
+				6AA4A3532DF28BB100AE8AA3 /* DonnaActivityWidget */,
+				6AA4A34E2DF28BB100AE8AA3 /* Frameworks */,
 				6AA3E7D22DF2817A0040A8C1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -101,8 +157,18 @@
 				6AA3E7D12DF2817A0040A8C1 /* donna.app */,
 				6AA3E7E22DF2817C0040A8C1 /* donnaTests.xctest */,
 				6AA3E7EC2DF2817C0040A8C1 /* donnaUITests.xctest */,
+				6AA4A34D2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		6AA4A34E2DF28BB100AE8AA3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				6AA4A34F2DF28BB100AE8AA3 /* WidgetKit.framework */,
+				6AA4A3512DF28BB100AE8AA3 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -115,10 +181,12 @@
 				6AA3E7CD2DF2817A0040A8C1 /* Sources */,
 				6AA3E7CE2DF2817A0040A8C1 /* Frameworks */,
 				6AA3E7CF2DF2817A0040A8C1 /* Resources */,
+				6AA4A3682DF28BB200AE8AA3 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				6AA4A3622DF28BB200AE8AA3 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				6AA3E7D32DF2817A0040A8C1 /* donna */,
@@ -176,6 +244,28 @@
 			productReference = 6AA3E7EC2DF2817C0040A8C1 /* donnaUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		6AA4A34C2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6AA4A3642DF28BB200AE8AA3 /* Build configuration list for PBXNativeTarget "DonnaActivityWidgetExtension" */;
+			buildPhases = (
+				6AA4A3492DF28BB100AE8AA3 /* Sources */,
+				6AA4A34A2DF28BB100AE8AA3 /* Frameworks */,
+				6AA4A34B2DF28BB100AE8AA3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				6AA4A3532DF28BB100AE8AA3 /* DonnaActivityWidget */,
+			);
+			name = DonnaActivityWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = DonnaActivityWidgetExtension;
+			productReference = 6AA4A34D2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -197,6 +287,9 @@
 						CreatedOnToolsVersion = 16.4;
 						TestTargetID = 6AA3E7D02DF2817A0040A8C1;
 					};
+					6AA4A34C2DF28BB100AE8AA3 = {
+						CreatedOnToolsVersion = 16.4;
+					};
 				};
 			};
 			buildConfigurationList = 6AA3E7CC2DF2817A0040A8C1 /* Build configuration list for PBXProject "donna" */;
@@ -216,6 +309,7 @@
 				6AA3E7D02DF2817A0040A8C1 /* donna */,
 				6AA3E7E12DF2817C0040A8C1 /* donnaTests */,
 				6AA3E7EB2DF2817C0040A8C1 /* donnaUITests */,
+				6AA4A34C2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -236,6 +330,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		6AA3E7EA2DF2817C0040A8C1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6AA4A34B2DF28BB100AE8AA3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -266,6 +367,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6AA4A3492DF28BB100AE8AA3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -279,6 +387,11 @@
 			target = 6AA3E7D02DF2817A0040A8C1 /* donna */;
 			targetProxy = 6AA3E7ED2DF2817C0040A8C1 /* PBXContainerItemProxy */;
 		};
+		6AA4A3622DF28BB200AE8AA3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6AA4A34C2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension */;
+			targetProxy = 6AA4A3612DF28BB200AE8AA3 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -290,6 +403,7 @@
 				CODE_SIGN_ENTITLEMENTS = donna/donna.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z3XZ94WPLT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = donna/Info.plist;
@@ -319,6 +433,7 @@
 				CODE_SIGN_ENTITLEMENTS = donna/donna.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z3XZ94WPLT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = donna/Info.plist;
@@ -527,6 +642,60 @@
 			};
 			name = Release;
 		};
+		6AA4A3652DF28BB200AE8AA3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z3XZ94WPLT;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DonnaActivityWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = DonnaActivityWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.williamwagner.donna.DonnaActivityWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6AA4A3662DF28BB200AE8AA3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z3XZ94WPLT;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DonnaActivityWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = DonnaActivityWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.williamwagner.donna.DonnaActivityWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -562,6 +731,15 @@
 			buildConfigurations = (
 				6AA3E7FE2DF2817C0040A8C1 /* Debug */,
 				6AA3E7FF2DF2817C0040A8C1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6AA4A3642DF28BB200AE8AA3 /* Build configuration list for PBXNativeTarget "DonnaActivityWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6AA4A3652DF28BB200AE8AA3 /* Debug */,
+				6AA4A3662DF28BB200AE8AA3 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

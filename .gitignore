@@ -1,0 +1,6 @@
+### Xcode noise ###
+**/*.xcuserdatad/
+**/*.xcscmblueprint
+# Build artefacts
+DerivedData/
+build/
