@@ -77,7 +77,6 @@ struct DonnaRecordingLiveActivity: Widget {
             .padding()
             .activityBackgroundTint(Color.black)
             .activitySystemActionForegroundColor(Color.white)
-            .widgetURL(URL(string: "donna://stopRecording"))
 
         } dynamicIsland: { context in
             DynamicIsland {
@@ -102,9 +101,17 @@ struct DonnaRecordingLiveActivity: Widget {
                                 Capsule().fill(Color.gray.opacity(0.3))
                             )
                         
-                        Text("Tap to stop")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        // Interactive stop button
+                        Button(intent: StopRecordingIntent()) {
+                            Label("Stop Recording", systemImage: "stop.fill")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color.red)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -113,15 +120,21 @@ struct DonnaRecordingLiveActivity: Widget {
                         .monospacedDigit()
                 }
             } compactLeading: {
-                Image(systemName: "mic.fill")
-                    .foregroundColor(.red)
+                Button(intent: StopRecordingIntent()) {
+                    Image(systemName: "stop.fill")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
             } compactTrailing: {
                 Text(formatDuration(context.state.duration))
                     .monospacedDigit()
                     .frame(minWidth: 45)
             } minimal: {
-                Image(systemName: "mic.fill")
-                    .foregroundColor(.red)
+                Button(intent: StopRecordingIntent()) {
+                    Image(systemName: "mic.fill")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
             }
             .keylineTint(Color.red)
         }

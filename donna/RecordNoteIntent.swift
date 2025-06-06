@@ -10,65 +10,35 @@ import ActivityKit
 import AVFoundation
 import SwiftUI
 import Foundation
+import CoreFoundation
 
-struct RecordNoteIntent: AudioRecordingIntent, LiveActivityIntent {
+struct RecordNoteIntent: AppIntent {
     static var title: LocalizedStringResource = "Donna note"
     static var description = IntentDescription("Start recording a note with Donna")
     
     // No UI - runs entirely in background
     static var openAppWhenRun: Bool = false
     
-    @MainActor
     func perform() async throws -> some IntentResult {
         print("[RecordNoteIntent] Starting recording intent")
         
-        // Check if Live Activities are available
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            print("[RecordNoteIntent] Live Activities are not enabled")
-            // Start recording without Live Activity
-            let recordingId = UUID().uuidString
-            AudioRecordingManager.shared.startRecording(activityId: recordingId)
-            await provideHapticFeedback()
-            return .result()
-        }
+        // Post Darwin notification to start recording
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            kDonnaStart,
+            nil,
+            nil,
+            true
+        )
         
-        // Start the Live Activity
-        let attributes = DonnaRecordingAttributes()
-        let initialState = DonnaRecordingAttributes.ContentState(isRecording: true, duration: 0)
-        
-        do {
-            let activity = try Activity<DonnaRecordingAttributes>.request(
-                attributes: attributes,
-                content: .init(state: initialState, staleDate: nil),
-                pushType: nil
-            )
-            
-            print("[RecordNoteIntent] Live Activity started with ID: \(activity.id)")
-            
-            // Start background audio recording
-            AudioRecordingManager.shared.startRecording(activityId: activity.id)
-            
-            // Haptic feedback to confirm recording started
-            await provideHapticFeedback()
-            
-        } catch {
-            print("[RecordNoteIntent] Failed to start Live Activity: \(error)")
-            // Fallback: Start recording without Live Activity
-            let recordingId = UUID().uuidString
-            AudioRecordingManager.shared.startRecording(activityId: recordingId)
-            await provideHapticFeedback()
-        }
-        
-        return .result()
-    }
-    
-    private func provideHapticFeedback() async {
-        // Gentle haptic to confirm recording started
+        // Provide haptic feedback
         await MainActor.run {
             let impactFeedback = UIImpactFeedbackGenerator(style: .light)
             impactFeedback.prepare()
             impactFeedback.impactOccurred()
         }
+        
+        return .result()
     }
 }
 

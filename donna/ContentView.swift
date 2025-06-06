@@ -14,17 +14,18 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var items: [Item]
     @State private var recordings: [RecordingFile] = []
-    @State private var isRecording = false
+    @State private var recorderModel = recorderController.model
     
     var body: some View {
         NavigationView {
             List {
                 Section("Actions") {
                     Button(action: toggleRecording) {
-                        Label(isRecording ? "Stop Recording" : "Start Recording", 
-                              systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                            .foregroundColor(isRecording ? .red : .blue)
+                        Label(recorderModel.isRecording ? "Stop Recording" : "Start Recording", 
+                              systemImage: recorderModel.isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                            .foregroundColor(recorderModel.isRecording ? .red : .blue)
                     }
+                    .disabled(recorderModel.state == .starting)
                 }
                 
                 Section("Recordings") {
@@ -41,45 +42,58 @@ struct ContentView: View {
             }
             .navigationTitle("Donna")
             .toolbar {
-                if isRecording {
+                if recorderModel.state == .recording {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Text("Recording...")
-                            .foregroundColor(.red)
-                            .font(.caption)
+                        HStack(spacing: 4) {
+                            Image(systemName: "mic.fill")
+                                .foregroundColor(.red)
+                                .font(.caption)
+                            Text(formatDuration(recorderModel.duration))
+                                .monospacedDigit()
+                                .font(.caption)
+                        }
+                    }
+                } else if recorderModel.state == .starting {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        ProgressView()
+                            .scaleEffect(0.8)
                     }
                 }
             }
         }
         .onAppear(perform: loadRecordings)
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            updateRecordingState()
-            // Reload recordings periodically to catch new ones
-            if !isRecording {
-                loadRecordings()
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             // Reload when app comes to foreground
             loadRecordings()
         }
         .onReceive(NotificationCenter.default.publisher(for: .donnaRecordingFinished)) { _ in
             loadRecordings()
-            isRecording = false            // toolbar badge off
+        }
+        .task {
+            // Periodically reload recordings when not recording
+            while true {
+                if recorderModel.state == .idle {
+                    loadRecordings()
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
         }
     }
     
     private func toggleRecording() {
-        if isRecording {
-            AudioRecordingManager.shared.stopRecording()
-        } else {
-            let recordingId = UUID().uuidString
-            AudioRecordingManager.shared.startRecording(activityId: recordingId)
+        Task {
+            if recorderModel.state == .recording {
+                await recorderController.stop()
+            } else if recorderModel.state == .idle {
+                try? await recorderController.start()
+            }
         }
-        updateRecordingState()
     }
     
-    private func updateRecordingState() {
-        isRecording = AudioRecordingManager.shared.isRecording
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
     
     private func loadRecordings() {

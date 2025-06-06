@@ -9,6 +9,8 @@ import SwiftUI
 import SwiftData
 import AppIntents
 import Foundation
+import AVFoundation
+import CoreFoundation
 
 @main
 struct donnaApp: App {
@@ -27,13 +29,52 @@ struct donnaApp: App {
     
     init() {
         print("[donnaApp] App initialized")
+        
+        // Configure audio session for background recording
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord,
+                                  mode: .default,
+                                  options: [.mixWithOthers, .defaultToSpeaker])
+            print("[donnaApp] Audio session configured")
+        } catch {
+            print("[donnaApp] Failed to configure audio session: \(error)")
+        }
+        
+        // Listen for start recording notifications
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             nil,
             { _, _, _, _, _ in
-                AudioRecordingManager.shared.stopRecording()
+                DispatchQueue.main.async {
+                    print("[donnaApp] Received start recording notification")
+                    Task {
+                        do {
+                            try await recorderController.start()
+                        } catch {
+                            print("[donnaApp] Failed to start recording: \(error)")
+                        }
+                    }
+                }
             },
-            "DonnaRecordingStopped" as CFString,
+            "DonnaStartRecording" as CFString,
+            nil,
+            .deliverImmediately
+        )
+        
+        // Listen for stop recording notifications
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                DispatchQueue.main.async {
+                    print("[donnaApp] Received stop recording notification")
+                    Task {
+                        await recorderController.stop()
+                    }
+                }
+            },
+            "DonnaStopRecording" as CFString,
             nil,
             .deliverImmediately
         )
@@ -42,11 +83,6 @@ struct donnaApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .onOpenURL { url in
-                    if url.absoluteString == "donna://stopRecording" {
-                        AudioRecordingManager.shared.stopRecording()
-                    }
-                }
         }
         .modelContainer(sharedModelContainer)
     }
