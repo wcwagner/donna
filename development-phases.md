@@ -4,22 +4,42 @@
 *Fix blockers that prevent basic functionality*
 
 ### Sprint 1: Core Recording Architecture
-- [ ] **A-1**: Refactor to AudioRecordingIntent
+- [x] **A-1**: Refactor to AudioRecordingIntent
   - Move all recording logic from DonnaApp to RecordNoteIntent
   - Set `openAppWhenRun = false`
   - Delete duplicate AudioRecordingManager
   - Ensure works with app terminated
   - Test: Kill app → trigger shortcut → verify recording starts
 
-- [ ] **L-1**: Fix Activity Request Timing  
+- [x] **L-1**: Fix Activity Request Timing  
   - Current (WRONG): startRecording() → Activity.request()
   - Fixed: Activity.request() → await success → startRecording()
   - Add error handling if Activity fails
   - Show clear error state to user
 
-- [ ] **O-2**: Fix Info.plist
+- [x] **O-2**: Fix Info.plist
   - Add missing CFBundleIdentifier
   - Verify all required capabilities
+
+- [ ] **N-1**: Live-Activity timer ticks every 1s
+  - Replace 10s Timer with `Text(timerInterval:...style:.timer)`
+  - Dynamic Island shows real-time counter
+  - No more manual timer updates
+
+- [ ] **N-2**: Stop UI everywhere
+  - Minimal/compact leading shows `stop.fill` button wired to `StopRecordingIntent`
+  - Main-app Status row shows "Stop" button instead of "Open Shortcuts" when recording
+  - Ensure stop button works from all contexts
+
+- [ ] **N-3**: Single-activity guard
+  - Prevent multiple Live Activities when shortcut pressed repeatedly
+  - Second shortcut press updates existing Activity instead of throwing visibility error
+  - Check for existing activity before creating new one
+
+- [ ] **C-1**: CoreData history reset
+  - Detect orphaned entity "Item" on dev builds
+  - Wipe store and recreate if needed
+  - Add lightweight migration path for beta
 
 ### Sprint 2: Robustness & Permissions
 - [ ] **O-1**: Onboarding Flow
@@ -35,10 +55,25 @@
   - Update Live Activity with interruption reason
   - Save partial recording if possible
 
-- [ ] **L-2**: Optimize Update Frequency
-  - Change from 250ms → 10s updates
-  - Use ActivityKit timeline for auto-updating timer
+- [x] **L-2**: Optimize Update Frequency
+  - Changed from 250ms → 10s updates
+  - Will use ActivityKit timeline for auto-updating timer (via N-1)
   - Measure battery impact before/after
+
+- [ ] **C-2**: Delete sample widget code
+  - Remove `DonnaActivityWidgetControl`
+  - Remove `DonnaActivityWidget` timer demo
+  - Clean up any other template/placeholder code
+
+- [ ] **C-3**: Consolidate AudioRecordingManager
+  - Remove duplicate definitions
+  - Keep single source under Shared
+  - Ensure both targets reference same code
+
+- [ ] **C-4**: Fix CFPrefs warning
+  - Switch to standard `UserDefaults(suiteName:)`
+  - Remove cross-user scope usage
+  - Test that shared data still works correctly
 
 ## Phase 1: MVP - Complete Voice Capture System
 *Working shortcut → record → transcribe → reminder flow*
@@ -95,8 +130,12 @@
 - Identified critical blockers: A-1, L-1, O-1, O-2
 - Created two-file documentation system
 
-### 2025-01-07
-- [YOUR UPDATES HERE]
+### 2025-01-07  
+- Completed cleanup tasks (removed boilerplate tests, unused models)
+- Completed A-1: Moved all recording to RecordNoteIntent
+- Completed L-1: Fixed Activity timing (request before audio)
+- Completed O-2: Fixed Info.plist bundle identifier
+- Added new tasks based on UX testing: N-1, N-2, N-3 (timer and stop UI)
 
 ## Notes
 - Keep focused on Phase 0 & 1 only

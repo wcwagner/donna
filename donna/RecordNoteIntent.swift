@@ -12,31 +12,79 @@ import SwiftUI
 import Foundation
 import CoreFoundation
 
-struct RecordNoteIntent: AppIntent {
+struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
     static var title: LocalizedStringResource = "Donna note"
     static var description = IntentDescription("Start recording a note with Donna")
     
     // No UI - runs entirely in background
     static var openAppWhenRun: Bool = false
     
+    @MainActor
     func perform() async throws -> some IntentResult {
         print("[RecordNoteIntent] Starting recording intent")
         
-        // Post Darwin notification to start recording
-        CFNotificationCenterPostNotification(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            kDonnaStart,
-            nil,
-            nil,
-            true
-        )
+        // Check microphone permission first
+        let micPermission = AVAudioApplication.shared.recordPermission
+        if micPermission == .undetermined {
+            await AVAudioApplication.requestRecordPermission()
+        }
+        
+        let micStatus = AVAudioApplication.shared.recordPermission
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            try await requestToContinueInForeground()
+            return .result()
+        }
+        
+        // Generate unique ID for this recording
+        let recordingId = UUID().uuidString
+        
+        // L-1 Fix: Request Live Activity BEFORE starting audio
+        do {
+            let initialState = DonnaRecordingAttributes.ContentState(
+                isRecording: true,
+                duration: 0,
+                audioLevel: 0
+            )
+            
+            let activityContent = ActivityContent(
+                state: initialState,
+                staleDate: nil
+            )
+            
+            let activity = try Activity.request(
+                attributes: DonnaRecordingAttributes(),
+                content: activityContent,
+                pushType: nil
+            )
+            
+            print("[RecordNoteIntent] Live Activity started: \(activity.id)")
+            
+            // Now start the actual recording
+            AudioRecordingManager.shared.startRecording(activityId: activity.id)
+            
+            // Listen for stop notifications from the widget
+            CFNotificationCenterAddObserver(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                nil,
+                { _, _, _, _, _ in
+                    DispatchQueue.main.async {
+                        AudioRecordingManager.shared.stopRecording()
+                    }
+                },
+                kDonnaStop.rawValue,
+                nil,
+                .coalesce
+            )
+            
+        } catch {
+            print("[RecordNoteIntent] Failed to start Live Activity: \(error)")
+            throw error
+        }
         
         // Provide haptic feedback
-        await MainActor.run {
-            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-            impactFeedback.prepare()
-            impactFeedback.impactOccurred()
-        }
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.prepare()
+        impactFeedback.impactOccurred()
         
         return .result()
     }
@@ -126,7 +174,8 @@ class AudioRecordingManager: NSObject {
     }
     
     private func startSilenceDetection() {
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25,
+        // L-2 Fix: Update every 10 seconds instead of 0.25s
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 10.0,
                                               repeats: true) { [weak self] _ in
             guard let self, let start = self.recordingStartTime else { return }
             let dur = Date().timeIntervalSince(start)
@@ -172,11 +221,37 @@ class AudioRecordingManager: NSObject {
         impactFeedback.prepare()
         impactFeedback.impactOccurred()
         
-        // TODO: Store audio file in SQLite
+        // Save recording metadata
+        if let startTime = recordingStartTime,
+           let recordingId = currentActivityId {
+            let duration = Date().timeIntervalSince(startTime)
+            saveRecordingMetadata(id: recordingId, startDate: startTime, duration: duration)
+        }
+        
         // TODO: Process with Whisper
         
         currentActivityId = nil
         recordingStartTime = nil
+    }
+    
+    private func saveRecordingMetadata(id: String, startDate: Date, duration: TimeInterval) {
+        guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.williamwagner.donna") else {
+            print("[AudioRecordingManager] Failed to get App Group container for metadata")
+            return
+        }
+        
+        let audioFilePath = containerURL.appendingPathComponent("\(id).m4a").path
+        
+        // Store metadata in shared UserDefaults for now
+        // Main app will sync this to SwiftData
+        let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna")
+        var recordings = userDefaults?.dictionary(forKey: "recordings") ?? [:]
+        recordings[id] = [
+            "startDate": startDate,
+            "duration": duration,
+            "audioFilePath": audioFilePath
+        ]
+        userDefaults?.set(recordings, forKey: "recordings")
     }
     
     @MainActor

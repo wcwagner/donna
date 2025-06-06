@@ -1,17 +1,8 @@
-//
-//  donnaTests.swift
-//  donnaTests
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import Testing
+import XCTest
 @testable import donna
 
-struct donnaTests {
-
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+final class donnaTests: XCTestCase {
+    func testNotImplemented() throws {
+        XCTFail("Not implemented")
     }
-
 }

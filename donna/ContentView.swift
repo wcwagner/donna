@@ -8,24 +8,35 @@
 import SwiftUI
 import SwiftData
 import AVFoundation
-import AVKit
+import ActivityKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
-    @State private var recordings: [RecordingFile] = []
-    @State private var recorderModel = recorderController.model
+    @Query(sort: \Recording.startDate, order: .reverse) private var recordings: [Recording]
+    @State private var isRecording = false
+    @State private var currentRecordingId: String?
     
     var body: some View {
         NavigationView {
             List {
-                Section("Actions") {
-                    Button(action: toggleRecording) {
-                        Label(recorderModel.isRecording ? "Stop Recording" : "Start Recording", 
-                              systemImage: recorderModel.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                            .foregroundColor(recorderModel.isRecording ? .red : .blue)
+                Section("Status") {
+                    if isRecording {
+                        HStack {
+                            Image(systemName: "mic.fill")
+                                .foregroundColor(.red)
+                            Text("Recording in progress...")
+                            Spacer()
+                            Button("Open Shortcuts") {
+                                if let url = URL(string: "shortcuts://") {
+                                    UIApplication.shared.open(url)
+                                }
+                            }
+                            .font(.caption)
+                        }
+                    } else {
+                        Text("Use the Donna shortcut or Action Button to start recording")
+                            .foregroundColor(.secondary)
                     }
-                    .disabled(recorderModel.state == .starting)
                 }
                 
                 Section("Recordings") {
@@ -36,110 +47,91 @@ struct ContentView: View {
                         ForEach(recordings) { recording in
                             RecordingRow(recording: recording)
                         }
-                        .onDelete(perform: deleteRecording)
+                        .onDelete(perform: deleteRecordings)
                     }
                 }
             }
             .navigationTitle("Donna")
-            .toolbar {
-                if recorderModel.state == .recording {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "mic.fill")
-                                .foregroundColor(.red)
-                                .font(.caption)
-                            Text(formatDuration(recorderModel.duration))
-                                .monospacedDigit()
-                                .font(.caption)
-                        }
-                    }
-                } else if recorderModel.state == .starting {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                    }
-                }
-            }
         }
-        .onAppear(perform: loadRecordings)
+        .onAppear {
+            syncRecordingsFromUserDefaults()
+            checkActiveRecording()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            // Reload when app comes to foreground
-            loadRecordings()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .donnaRecordingFinished)) { _ in
-            loadRecordings()
+            syncRecordingsFromUserDefaults()
+            checkActiveRecording()
         }
         .task {
-            // Periodically reload recordings when not recording
+            // Periodically check for new recordings and active state
             while true {
-                if recorderModel.state == .idle {
-                    loadRecordings()
-                }
+                syncRecordingsFromUserDefaults()
+                checkActiveRecording()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
     }
     
-    private func toggleRecording() {
-        Task {
-            if recorderModel.state == .recording {
-                await recorderController.stop()
-            } else if recorderModel.state == .idle {
-                try? await recorderController.start()
-            }
-        }
+    private func checkActiveRecording() {
+        // Check if there's an active recording by looking at Live Activities
+        let activities = Activity<DonnaRecordingAttributes>.activities
+        isRecording = !activities.isEmpty
+        currentRecordingId = activities.first?.id
     }
     
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-    
-    private func loadRecordings() {
-        guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.williamwagner.donna") else {
+    private func syncRecordingsFromUserDefaults() {
+        guard let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna"),
+              let recordingsDict = userDefaults.dictionary(forKey: "recordings") else {
             return
         }
         
-        do {
-            let files = try FileManager.default.contentsOfDirectory(at: containerURL, includingPropertiesForKeys: [.creationDateKey])
-            recordings = files.compactMap { url in
-                guard url.pathExtension == "m4a" else { return nil }
-                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-                let creationDate = attributes?[.creationDate] as? Date ?? Date()
-                
-                let asset    = AVURLAsset(url: url)
-                let duration = CMTimeGetSeconds(asset.duration)
-                
-                return RecordingFile(id: url.deletingPathExtension().lastPathComponent,
-                                     url: url,
-                                     creationDate: creationDate,
-                                     duration: duration)
+        // Check each recording in UserDefaults
+        for (id, value) in recordingsDict {
+            guard let data = value as? [String: Any],
+                  let startDate = data["startDate"] as? Date,
+                  let duration = data["duration"] as? TimeInterval,
+                  let audioFilePath = data["audioFilePath"] as? String else {
+                continue
             }
-            .sorted { $0.creationDate > $1.creationDate }
-        } catch {
-            print("Failed to load recordings: \(error)")
+            
+            // Check if we already have this recording in SwiftData
+            let existingRecording = recordings.first { $0.id == id }
+            if existingRecording == nil {
+                // Add new recording to SwiftData
+                let recording = Recording(id: id, startDate: startDate, duration: duration, audioFilePath: audioFilePath)
+                modelContext.insert(recording)
+            }
         }
+        
+        try? modelContext.save()
     }
     
-    private func deleteRecording(at offsets: IndexSet) {
+    private func deleteRecordings(at offsets: IndexSet) {
         for index in offsets {
             let recording = recordings[index]
-            try? FileManager.default.removeItem(at: recording.url)
+            
+            // Delete audio file
+            if let url = URL(string: recording.audioFilePath) {
+                try? FileManager.default.removeItem(at: url)
+            }
+            
+            // Delete from SwiftData
+            modelContext.delete(recording)
+            
+            // Remove from UserDefaults
+            if let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna") {
+                var recordingsDict = userDefaults.dictionary(forKey: "recordings") ?? [:]
+                recordingsDict.removeValue(forKey: recording.id)
+                userDefaults.set(recordingsDict, forKey: "recordings")
+            }
         }
-        loadRecordings()
+        
+        try? modelContext.save()
     }
 }
 
-struct RecordingFile: Identifiable {
-    let id: String
-    let url: URL
-    let creationDate: Date
-    let duration: TimeInterval      // ← new
-}
 
 struct RecordingRow: View {
-    let recording: RecordingFile
+    let recording: Recording
     @State private var isPlaying = false
     @State private var audioPlayer: AVAudioPlayer?
     @State private var audioDelegate: AudioPlayerDelegate?
@@ -148,12 +140,17 @@ struct RecordingRow: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text(recording.creationDate, style: .date)
+                Text(recording.startDate, style: .date)
                     .font(.headline)
                 HStack {
-                    Text(recording.creationDate, style: .time)
+                    Text(recording.startDate, style: .time)
                     Text("·")
                     Text(formatTime(recording.duration))
+                    if recording.transcription != nil {
+                        Text("·")
+                        Image(systemName: "text.bubble")
+                            .font(.caption)
+                    }
                 }
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -190,7 +187,11 @@ struct RecordingRow: View {
                 try audioSession.setCategory(.playback, mode: .default)
                 try audioSession.setActive(true)
                 
-                audioPlayer = try AVAudioPlayer(contentsOf: recording.url)
+                guard let url = URL(string: recording.audioFilePath) else {
+                    print("Invalid audio file path")
+                    return
+                }
+                audioPlayer = try AVAudioPlayer(contentsOf: url)
                 let delegate = AudioPlayerDelegate { 
                     DispatchQueue.main.async {
                         playbackFinished = true
@@ -227,5 +228,5 @@ class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: Recording.self, inMemory: true)
 }

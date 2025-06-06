@@ -10,8 +10,8 @@
 		6AA4A3502DF28BB100AE8AA3 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6AA4A34F2DF28BB100AE8AA3 /* WidgetKit.framework */; };
 		6AA4A3522DF28BB100AE8AA3 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6AA4A3512DF28BB100AE8AA3 /* SwiftUI.framework */; };
 		6AA4A3632DF28BB200AE8AA3 /* DonnaActivityWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6AA4A34D2DF28BB100AE8AA3 /* DonnaActivityWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		6AA4A3842DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */; };
-		6AA4A3852DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */; };
+		6AA4A3922DF3B09300AE8AA3 /* SharedTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */; };
+		6AA4A3932DF3B09300AE8AA3 /* SharedTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4A3832DF2AB7B00AE8AA3 /* SharedTypes.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -365,7 +365,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				6AA4A3842DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */,
+				6AA4A3922DF3B09300AE8AA3 /* SharedTypes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -387,7 +387,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				6AA4A3852DF2AB7B00AE8AA3 /* SharedTypes.swift in Sources */,
+				6AA4A3932DF3B09300AE8AA3 /* SharedTypes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

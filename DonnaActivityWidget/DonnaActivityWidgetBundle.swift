@@ -14,7 +14,6 @@ struct DonnaActivityWidgetBundle: WidgetBundle {
     var body: some Widget {
         DonnaActivityWidget()
         DonnaActivityWidgetControl()
-        DonnaActivityWidgetLiveActivity()
         DonnaRecordingLiveActivity()
     }
 }
