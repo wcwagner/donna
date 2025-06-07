@@ -11,6 +11,7 @@ import AVFoundation
 import ActivityKit
 import CoreFoundation
 import DonnaShared
+import OSLog
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -37,6 +38,9 @@ struct ContentView: View {
                                     .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
+                            .onTapGesture {
+                                Log.app.info("🔴 Stop button tapped in main app")
+                            }
                         }
                     } else {
                         Text("Use the Donna shortcut or Action Button to start recording")
@@ -81,6 +85,10 @@ struct ContentView: View {
         let activities = Activity<DonnaRecordingAttributes>.activities
         isRecording = !activities.isEmpty
         currentRecordingId = activities.first?.id
+        
+        if isRecording {
+            Log.app.debug("🔴 Active recording detected: \(currentRecordingId ?? "unknown")")
+        }
     }
     
     private func syncRecordingsFromUserDefaults() {
@@ -104,6 +112,7 @@ struct ContentView: View {
                 // Add new recording to SwiftData
                 let recording = Recording(id: id, startDate: startDate, duration: duration, audioFilePath: audioFilePath)
                 modelContext.insert(recording)
+                Log.app.info("💾 Synced new recording: \(id)")
             }
         }
         
@@ -170,8 +179,8 @@ struct RecordingRow: View {
             }
         }
         .padding(.vertical, 4)
-        .onChange(of: playbackFinished) { finished in
-            if finished {
+        .onChange(of: playbackFinished) {
+            if playbackFinished {
                 isPlaying = false
                 audioPlayer = nil
                 audioDelegate = nil
@@ -205,8 +214,9 @@ struct RecordingRow: View {
                 audioPlayer?.prepareToPlay()
                 audioPlayer?.play()
                 isPlaying = true
+                Log.app.info("▶️ Playing recording: \(recording.id)")
             } catch {
-                print("Failed to play audio: \(error)")
+                Log.app.error("❌ Failed to play audio: \(error)")
             }
         }
     }

@@ -9,6 +9,7 @@ import ActivityKit
 import Foundation
 import AppIntents
 import CoreFoundation
+import OSLog
 
 // MARK: - Darwin Notification Names
 
@@ -54,23 +55,26 @@ public struct StopRecordingIntent: AppIntent {
     public func perform() async throws -> some IntentResult {
         // Debounce rapid taps (1 second minimum between invocations)
         guard Date().timeIntervalSince(Self.lastInvocation) > 1.0 else {
-            print("StopRecordingIntent: Debounced duplicate stop request")
+            Log.intent.info("⏸️ StopRecordingIntent: Debounced duplicate stop request")
             return .result()
         }
         Self.lastInvocation = Date()
         
-        // ① Broadcast – reaches recorder regardless of process
-        CFNotificationCenterPostNotification(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            kDonnaStop,
-            nil, nil, true   // deliverImmediately
-        )
-        
-        // ② Fast path – if we *are* the recorder process, act directly
         if await AudioRecordingManager.shared.isRecording {
+            // We ARE already in the recorder process ⇒ stop directly.
+            Log.intent.info("🛑 Stop: direct call (same process)")
             await AudioRecordingManager.shared.stopRecording()
+        } else {
+            // Remote process ⇒ broadcast.
+            Log.intent.info("📡 Stop: broadcasting to remote process")
+            CFNotificationCenterPostNotification(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                kDonnaStop,
+                nil, nil, true   // deliverImmediately
+            )
         }
         
         return .result()
     }
 }
+

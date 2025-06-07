@@ -9,6 +9,7 @@ import Foundation
 import AVFoundation
 import UIKit
 import ActivityKit
+import OSLog
 
 public enum RecordingError: Error {
     case startFailed
@@ -27,6 +28,8 @@ public actor AudioRecordingManager {
     private var currentActivityId: String?
     private var recordingStartTime: Date?
     private var smoothedLevel: Double = 0   // 0‥1 linear
+    private var isStopping = false          // ⬅︎ guard flag
+    private var stopContinuation: CheckedContinuation<Void, Never>?
     
     public var isRecording: Bool {
         return audioRecorder?.isRecording ?? false
@@ -70,20 +73,43 @@ public actor AudioRecordingManager {
                               options: [.mixWithOthers, .defaultToSpeaker])
             try s.setAllowHapticsAndSystemSoundsDuringRecording(true)
             try s.setActive(true)
-            print("[AudioRecordingManager] Audio session configured for background mixing")
+            Log.audio.info("✅ Audio session configured for background mixing")
         } catch {
-            print("[AudioRecordingManager] Failed to set up audio session: \(error)")
+            Log.audio.error("❌ Failed to set up audio session: \(error)")
         }
     }
     
     public func startRecording(activityId: String) async throws {
-        print("[AudioRecordingManager] Starting recording for activity: \(activityId)")
+        // ① Wait if a stop is still in progress
+        if isStopping {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                stopContinuation = c
+            }
+        }
+        
+        // ② Don't double-start
+        guard audioRecorder == nil else {
+            Log.audio.warning("⚠️ Already recording, ignoring start request")
+            return
+        }
+        
+        Log.audio.info("🎙️ start id=\(activityId, privacy: .public)")
+        let spState = Log.sp.beginInterval("Start→RecorderReady")
+        
         currentActivityId = activityId
         recordingStartTime = Date()
         
+        // ③ Activate session fresh every time
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            Log.audio.error("❌ Failed to activate audio session: \(error)")
+            throw RecordingError.audioSessionError
+        }
+        
         // Configure audio recorder - use App Group container
         guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.identifier) else {
-            print("[AudioRecordingManager] Failed to get App Group container")
+            Log.audio.error("❌ Failed to get App Group container")
             return
         }
         let audioFilename = containerURL.appendingPathComponent("\(activityId).m4a")
@@ -103,15 +129,16 @@ public actor AudioRecordingManager {
             let prepareSuccess = audioRecorder?.prepareToRecord() ?? false
             let recordingStarted = audioRecorder?.record() ?? false
             
-            print("[AudioRecordingManager] Prepare success: \(prepareSuccess)")
-            print("[AudioRecordingManager] Recording started: \(recordingStarted)")
-            print("[AudioRecordingManager] Is recording: \(audioRecorder?.isRecording ?? false)")
-            print("[AudioRecordingManager] Audio session input available: \(AVAudioSession.sharedInstance().isInputAvailable)")
+            Log.audio.debug("📊 Prepare success: \(prepareSuccess)")
+            Log.audio.debug("📊 Recording started: \(recordingStarted)")
+            Log.audio.debug("📊 Is recording: \(self.audioRecorder?.isRecording ?? false)")
+            Log.audio.debug("📊 Audio session input available: \(AVAudioSession.sharedInstance().isInputAvailable)")
             
             // Fail fast if recording didn't start
             guard recordingStarted else {
-                print("[AudioRecordingManager] ERROR: Failed to start recording - likely missing background audio mode")
-                print("[AudioRecordingManager] This typically happens when running from Shortcuts without a proper App Intent Extension")
+                Log.audio.error("❌ record() == false – mic busy")
+                Log.audio.info("🔄 Resetting audio session")
+                Log.sp.endInterval("Start→RecorderReady", spState)
                 
                 // Clean up
                 audioRecorder = nil
@@ -119,11 +146,17 @@ public actor AudioRecordingManager {
                 currentActivityId = nil
                 recordingStartTime = nil
                 
+                // Deactivate session to reset Core Audio state
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                
                 // End the Live Activity with error state
                 await endLiveActivity(activityId)
                 
                 throw RecordingError.startFailed
             }
+            
+            Log.sp.endInterval("Start→RecorderReady", spState)
+            Log.audio.info("✅ recStarted")
             
             // Start monitoring for silence
             startSilenceDetection()
@@ -132,13 +165,13 @@ public actor AudioRecordingManager {
             Task.detached(priority: .background) { [currentActivityId] in
                 try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000) // 30 minutes
                 if await AudioRecordingManager.shared.currentRecordingId == currentActivityId {
-                    print("[AudioRecordingManager] Auto-stopping after 30 minutes")
+                    Log.audio.warning("⏰ Auto-stopping after 30 minutes")
                     await AudioRecordingManager.shared.stopRecording()
                 }
             }
             
         } catch {
-            print("[AudioRecordingManager] Failed to start recording: \(error)")
+            Log.audio.error("❌ Failed to start recording: \(error)")
         }
     }
     
@@ -176,13 +209,19 @@ public actor AudioRecordingManager {
     }
     
     public func stopRecording() async {
-        print("[AudioRecordingManager] Stopping recording")
+        guard !isStopping else { return }
+        isStopping = true
+        
+        Log.audio.info("⏹️ stop request")
         recordingTimer?.invalidate()
         recordingTimer = nil
         
         audioRecorder?.stop()
         audioRecorder = nil
         audioRecorderDelegate = nil
+        
+        // ⑤ Deactivate session — **critical**
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         
         // End Live Activity
         if let activityId = currentActivityId {
@@ -207,13 +246,21 @@ public actor AudioRecordingManager {
         
         // TODO: Process with Whisper
         
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        Log.audio.info("🛑 recStopped dur=\(duration, format: .fixed) s")
+        
         currentActivityId = nil
         recordingStartTime = nil
+        isStopping = false
+        
+        // Wake any waiter
+        stopContinuation?.resume()
+        stopContinuation = nil
     }
     
     private func saveRecordingMetadata(id: String, startDate: Date, duration: TimeInterval) {
         guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.identifier) else {
-            print("[AudioRecordingManager] Failed to get App Group container for metadata")
+            Log.audio.error("❌ Failed to get App Group container for metadata")
             return
         }
         
@@ -222,7 +269,7 @@ public actor AudioRecordingManager {
         // Store metadata in shared UserDefaults for now
         // Main app will sync this to SwiftData
         guard let userDefaults = UserDefaults(suiteName: AppGroupConfig.identifier) else {
-            print("[AudioRecordingManager] Failed to access shared UserDefaults")
+            Log.audio.error("❌ Failed to access shared UserDefaults")
             return
         }
         

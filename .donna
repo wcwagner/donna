@@ -436,14 +436,7 @@ struct ContentView: View {
                                 .foregroundColor(.red)
                             Text("Recording in progress...")
                             Spacer()
-                            Button(action: {
-                                // Stop recording via Darwin notification
-                                CFNotificationCenterPostNotification(
-                                    CFNotificationCenterGetDarwinNotifyCenter(),
-                                    CFNotificationName("DonnaStopRecording" as CFString),
-                                    nil, nil, true
-                                )
-                            }) {
+                            Button(intent: StopRecordingIntent()) {
                                 Label("Stop", systemImage: "stop.fill")
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 12)
@@ -1146,9 +1139,20 @@ public actor AudioRecordingManager {
     }
     
     init() {
-        Task {
-            await setupAudioSession()
+        Task { 
+            await setupAudioSession() 
         }
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, name, _, _ in
+                guard name?.rawValue == kDonnaStop.rawValue else { return }
+                Task { await AudioRecordingManager.shared.stopRecording() }
+            },
+            kDonnaStop.rawValue,
+            nil,
+            .deliverImmediately
+        )
     }
     
     private func linearLevel() -> Double {
@@ -1225,6 +1229,15 @@ public actor AudioRecordingManager {
             
             // Start monitoring for silence
             startSilenceDetection()
+            
+            // Failsafe auto-stop after 30 minutes
+            Task.detached(priority: .background) { [currentActivityId] in
+                try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000) // 30 minutes
+                if await AudioRecordingManager.shared.currentRecordingId == currentActivityId {
+                    print("[AudioRecordingManager] Auto-stopping after 30 minutes")
+                    await AudioRecordingManager.shared.stopRecording()
+                }
+            }
             
         } catch {
             print("[AudioRecordingManager] Failed to start recording: \(error)")
@@ -1426,8 +1439,17 @@ public struct StopRecordingIntent: AppIntent {
         }
         Self.lastInvocation = Date()
         
-        // iOS 18 pattern: Direct call to AudioRecordingManager
-        await AudioRecordingManager.shared.stopRecording()
+        // ① Broadcast – reaches recorder regardless of process
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            kDonnaStop,
+            nil, nil, true   // deliverImmediately
+        )
+        
+        // ② Fast path – if we *are* the recorder process, act directly
+        if await AudioRecordingManager.shared.isRecording {
+            await AudioRecordingManager.shared.stopRecording()
+        }
         
         return .result()
     }

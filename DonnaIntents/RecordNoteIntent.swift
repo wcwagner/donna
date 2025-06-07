@@ -12,9 +12,10 @@ import SwiftUI
 import Foundation
 import CoreFoundation
 import DonnaShared
+import OSLog
 
 
-struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, ForegroundContinuableIntent {
+struct RecordNoteIntent: AudioRecordingIntent, ForegroundContinuableIntent {
     static var title: LocalizedStringResource = "Donna note"
     static var description = IntentDescription("Start recording a note with Donna")
     
@@ -23,8 +24,12 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
     
     @MainActor
     func perform() async throws -> some IntentResult {
-        print("[RecordNoteIntent] Starting recording intent")
-        print("[RecordNoteIntent] Process:", ProcessInfo.processInfo.processName)
+        Log.intent.info("↗️ RecordNoteIntent begin")
+        let spState = Log.sp.beginInterval("Intent-to-Active")
+        
+        defer { Log.sp.endInterval("Intent-to-Active", spState) }
+        
+        Log.intent.info("📦 Process: \(ProcessInfo.processInfo.processName)")
         
         // Check microphone permission first
         let micPermission = AVAudioApplication.shared.recordPermission
@@ -33,14 +38,15 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
         }
         
         let micStatus = AVAudioApplication.shared.recordPermission
+        Log.intent.info("🎤 Mic permission status: \(micStatus.rawValue)")
         guard AVAudioApplication.shared.recordPermission == .granted else {
-            try await requestToContinueInForeground()
-            return .result()
+            Log.intent.error("❌ Microphone access denied")
+            throw DonnaError.micDenied
         }
         
         // Pre-flight check: Are Live Activities enabled?
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            print("[RecordNoteIntent] Live Activities are disabled by user")
+            Log.intent.warning("⚠️ Live Activities are disabled by user")
             // Continue recording without Live Activity
             let recordingId = UUID().uuidString
             try await AudioRecordingManager.shared.startRecording(activityId: recordingId)
@@ -56,12 +62,12 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
         // N-3 Fix: Check for existing activity first
         let existingActivities = Activity<DonnaRecordingAttributes>.activities
         if !existingActivities.isEmpty {
-            print("[RecordNoteIntent] Found \(existingActivities.count) existing activities")
+            Log.intent.warning("🗑️ Found \(existingActivities.count) existing activities")
             
             // End all existing activities before starting new one
             for activity in existingActivities {
-                print("[RecordNoteIntent] Ending stale activity: \(activity.id)")
-                await activity.end(dismissalPolicy: .immediate)
+                Log.intent.info("🗑️ Ending stale activity: \(activity.id)")
+                await activity.end(ActivityContent(state: activity.content.state, staleDate: nil), dismissalPolicy: .immediate)
             }
             
             // Small delay to ensure activities are cleared
@@ -70,7 +76,7 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
         
         // Also check if AudioRecordingManager is already recording
         if await AudioRecordingManager.shared.isRecording {
-            print("[RecordNoteIntent] AudioRecordingManager is already recording, stopping first")
+            Log.intent.warning("⚠️ AudioRecordingManager is already recording, stopping first")
             await AudioRecordingManager.shared.stopRecording()
             
             // Wait a bit for cleanup
@@ -99,10 +105,17 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
                 pushType: nil
             )
             
-            print("[RecordNoteIntent] Live Activity started: \(activity.id)")
+            Log.intent.info("🚬 LiveActivity \(activity.id, privacy: .public) started")
             
             // Minimal-start pattern: Start recording immediately
-            try await AudioRecordingManager.shared.startRecording(activityId: activity.id)
+            Log.intent.info("🎬 Starting AudioRecordingManager...")
+            do {
+                try await AudioRecordingManager.shared.startRecording(activityId: activity.id)
+                Log.intent.info("✅ AudioRecordingManager started successfully")
+            } catch RecordingError.startFailed {
+                Log.intent.error("❌ record() returned false - throwing micBusy")
+                throw DonnaError.micBusy
+            }
             
             // Update activity to show recording state
             let recordingState = DonnaRecordingAttributes.ContentState(
@@ -117,11 +130,11 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
             // Stop notifications now handled via direct actor call in StopRecordingIntent
             
         } catch {
-            print("[RecordNoteIntent] Failed to start Live Activity: \(error)")
+            Log.intent.error("❌ Failed to start Live Activity: \(error)")
             
             // If Live Activity fails, continue recording without it
             if error.localizedDescription.contains("visibility") {
-                print("[RecordNoteIntent] Visibility error - continuing without Live Activity")
+                Log.intent.warning("👁️ Visibility error - continuing without Live Activity")
                 
                 do {
                     try await AudioRecordingManager.shared.startRecording(activityId: recordingId)
@@ -133,8 +146,8 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
                     
                     return .result()
                 } catch {
-                    print("[RecordNoteIntent] Recording failed even without Live Activity: \(error)")
-                    return .result()
+                    Log.intent.error("❌ Recording failed even without Live Activity: \(error)")
+                    throw error
                 }
             }
             
@@ -147,6 +160,28 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityStartingIntent, Foreg
         impactFeedback.impactOccurred()
         
         return .result()
+    }
+}
+
+// Custom error types for better Shortcuts error messages
+struct DonnaError: LocalizedError {
+    let reason: ErrorReason
+    
+    enum ErrorReason {
+        case micBusy
+        case micDenied
+    }
+    
+    static var micBusy: DonnaError { DonnaError(reason: .micBusy) }
+    static var micDenied: DonnaError { DonnaError(reason: .micDenied) }
+    
+    var errorDescription: String? {
+        switch reason {
+        case .micBusy: 
+            return "Microphone is still shutting down. Try again in a second."
+        case .micDenied:
+            return "Microphone access is required to record notes. Please enable in Settings."
+        }
     }
 }
 
