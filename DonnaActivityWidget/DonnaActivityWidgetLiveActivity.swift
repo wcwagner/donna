@@ -24,7 +24,8 @@ struct DonnaRecordingLiveActivity: Widget {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
-                Text(formatDuration(context.state.duration))
+                Text(timerInterval: context.state.startDate...Date.distantFuture,
+                     showsHours: false)
                     .monospacedDigit()
             }
             .padding()
@@ -68,7 +69,8 @@ struct DonnaRecordingLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(formatDuration(context.state.duration))
+                    Text(timerInterval: context.state.startDate...Date.distantFuture,
+                         showsHours: false)
                         .font(.largeTitle)
                         .monospacedDigit()
                 }
@@ -79,7 +81,8 @@ struct DonnaRecordingLiveActivity: Widget {
                 }
                 .buttonStyle(.plain)
             } compactTrailing: {
-                Text(formatDuration(context.state.duration))
+                Text(timerInterval: context.state.startDate...Date.distantFuture,
+                     showsHours: false)
                     .monospacedDigit()
                     .frame(minWidth: 45)
             } minimal: {
@@ -91,11 +94,5 @@ struct DonnaRecordingLiveActivity: Widget {
             }
             .keylineTint(Color.red)
         }
-    }
-    
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        return String(format: "%d:%02d", minutes, seconds)
     }
 }

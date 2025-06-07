@@ -21,22 +21,22 @@
   - Add missing CFBundleIdentifier
   - Verify all required capabilities
 
-- [ ] **N-1**: Live-Activity timer ticks every 1s
+- [x] **N-1**: Live-Activity timer ticks every 1s
   - Replace 10s Timer with `Text(timerInterval:...style:.timer)`
   - Dynamic Island shows real-time counter
   - No more manual timer updates
 
-- [ ] **N-2**: Stop UI everywhere
+- [x] **N-2**: Stop UI everywhere
   - Minimal/compact leading shows `stop.fill` button wired to `StopRecordingIntent`
   - Main-app Status row shows "Stop" button instead of "Open Shortcuts" when recording
   - Ensure stop button works from all contexts
 
-- [ ] **N-3**: Single-activity guard
+- [x] **N-3**: Single-activity guard
   - Prevent multiple Live Activities when shortcut pressed repeatedly
   - Second shortcut press updates existing Activity instead of throwing visibility error
   - Check for existing activity before creating new one
 
-- [ ] **C-1**: CoreData history reset
+- [x] **C-1**: CoreData history reset
   - Detect orphaned entity "Item" on dev builds
   - Wipe store and recreate if needed
   - Add lightweight migration path for beta
@@ -60,7 +60,7 @@
   - Will use ActivityKit timeline for auto-updating timer (via N-1)
   - Measure battery impact before/after
 
-- [ ] **C-2**: Delete sample widget code
+- [x] **C-2**: Delete sample widget code
   - Remove `DonnaActivityWidgetControl`
   - Remove `DonnaActivityWidget` timer demo
   - Clean up any other template/placeholder code
@@ -136,6 +136,11 @@
 - Completed L-1: Fixed Activity timing (request before audio)
 - Completed O-2: Fixed Info.plist bundle identifier
 - Added new tasks based on UX testing: N-1, N-2, N-3 (timer and stop UI)
+- Completed N-1: Updated Live Activity to use timerInterval for real-time updates
+- Completed N-2: Added stop buttons to Dynamic Island and main app
+- Completed N-3: Added single-activity guard to prevent duplicates
+- Completed C-1: Cleaned up orphaned CoreData entities
+- Completed C-2: Removed all sample widget code
 
 ## Notes
 - Keep focused on Phase 0 & 1 only

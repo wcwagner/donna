@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 import AVFoundation
 import ActivityKit
+import CoreFoundation
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -26,12 +27,22 @@ struct ContentView: View {
                                 .foregroundColor(.red)
                             Text("Recording in progress...")
                             Spacer()
-                            Button("Open Shortcuts") {
-                                if let url = URL(string: "shortcuts://") {
-                                    UIApplication.shared.open(url)
-                                }
+                            Button(action: {
+                                // Stop recording via Darwin notification
+                                CFNotificationCenterPostNotification(
+                                    CFNotificationCenterGetDarwinNotifyCenter(),
+                                    CFNotificationName("DonnaStopRecording" as CFString),
+                                    nil, nil, true
+                                )
+                            }) {
+                                Label("Stop", systemImage: "stop.fill")
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(Color.red)
+                                    .clipShape(Capsule())
                             }
-                            .font(.caption)
+                            .buttonStyle(.plain)
                         }
                     } else {
                         Text("Use the Donna shortcut or Action Button to start recording")

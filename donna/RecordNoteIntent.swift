@@ -35,6 +35,30 @@ struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
             return .result()
         }
         
+        // N-3 Fix: Check for existing activity first
+        let existingActivities = Activity<DonnaRecordingAttributes>.activities
+        if let existingActivity = existingActivities.first {
+            print("[RecordNoteIntent] Recording already in progress with activity: \(existingActivity.id)")
+            
+            // Update the existing activity instead of creating a new one
+            let updatedState = DonnaRecordingAttributes.ContentState(
+                isRecording: true,
+                startDate: existingActivity.content.state.startDate,
+                audioLevel: 0
+            )
+            
+            await existingActivity.update(
+                ActivityContent(state: updatedState, staleDate: nil)
+            )
+            
+            // Provide haptic feedback to confirm
+            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+            impactFeedback.prepare()
+            impactFeedback.impactOccurred()
+            
+            return .result()
+        }
+        
         // Generate unique ID for this recording
         let recordingId = UUID().uuidString
         
@@ -42,7 +66,7 @@ struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
         do {
             let initialState = DonnaRecordingAttributes.ContentState(
                 isRecording: true,
-                duration: 0,
+                startDate: Date(),
                 audioLevel: 0
             )
             
@@ -186,10 +210,11 @@ class AudioRecordingManager: NSObject {
     
     @MainActor
     private func updateLiveActivity(duration: TimeInterval, audioLevel: Double = 0.0) async {
-        guard let activityId = currentActivityId else { return }
+        guard let activityId = currentActivityId,
+              let startTime = recordingStartTime else { return }
         let updatedState = DonnaRecordingAttributes.ContentState(
             isRecording: true,
-            duration: duration,
+            startDate: startTime,
             audioLevel: audioLevel
         )
         
@@ -261,7 +286,7 @@ class AudioRecordingManager: NSObject {
 
         let stopState = DonnaRecordingAttributes.ContentState(
             isRecording: false,
-            duration: activity.content.state.duration,
+            startDate: activity.content.state.startDate,
             audioLevel: 0
         )
 

@@ -21,14 +21,14 @@ public struct DonnaRecordingAttributes: ActivityAttributes {
 
     public struct ContentState: Codable, Hashable {
         public var isRecording: Bool
-        public var duration: TimeInterval
+        public var startDate: Date
         public var audioLevel: Double     // ← for waveform 0‥1
 
         public init(isRecording: Bool,
-                    duration: TimeInterval,
+                    startDate: Date,
                     audioLevel: Double = 0) {
             self.isRecording = isRecording
-            self.duration    = duration
+            self.startDate = startDate
             self.audioLevel  = audioLevel
         }
     }

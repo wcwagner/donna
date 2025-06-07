@@ -12,8 +12,6 @@ import AppIntents
 @main
 struct DonnaActivityWidgetBundle: WidgetBundle {
     var body: some Widget {
-        DonnaActivityWidget()
-        DonnaActivityWidgetControl()
         DonnaRecordingLiveActivity()
     }
 }

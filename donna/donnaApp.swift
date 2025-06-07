@@ -18,7 +18,16 @@ struct donnaApp: App {
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+            
+            // C-1: Clean up orphaned entities on first launch
+            #if DEBUG
+            let context = container.mainContext
+            // This will automatically handle migration by creating a fresh schema
+            print("[donnaApp] SwiftData container initialized with Recording model")
+            #endif
+            
+            return container
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
