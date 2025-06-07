@@ -24,7 +24,8 @@ struct DonnaRecordingLiveActivity: Widget {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
-                Text(timerInterval: context.state.startDate...Date.distantFuture,
+                Text(timerInterval: context.state.startDate...Date(),
+                     countsDown: false,
                      showsHours: false)
                     .monospacedDigit()
             }
@@ -81,7 +82,8 @@ struct DonnaRecordingLiveActivity: Widget {
                 }
                 .buttonStyle(.plain)
             } compactTrailing: {
-                Text(timerInterval: context.state.startDate...Date.distantFuture,
+                Text(timerInterval: context.state.startDate...Date(),
+                     countsDown: false,
                      showsHours: false)
                     .monospacedDigit()
                     .frame(minWidth: 45)

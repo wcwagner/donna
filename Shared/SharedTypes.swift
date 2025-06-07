@@ -59,20 +59,17 @@ public struct StopRecordingIntent: AppIntent {
         }
         Self.lastInvocation = Date()
         
-        // Post Darwin notification that both app and widget can listen to
+        // iOS 18 pattern: Direct call instead of Darwin notification
+        // Note: This requires AudioRecordingManager to be available in widget extension
+        // For now, keep Darwin notification until we move to Swift Package
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
             kDonnaStop,
             nil, nil, true
         )
         
-        // Play haptic feedback for immediate user confirmation
-        // Note: Haptic feedback is not available in widget extensions
-        #if !WIDGET_EXTENSION
-        if #available(iOS 17.5, *) {
-            // This would work in the main app but not in widgets
-        }
-        #endif
+        // TODO: Replace with direct call once AudioRecordingManager is in shared package:
+        // AudioRecordingManager.shared.stopRecording()
         
         return .result()
     }

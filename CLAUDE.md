@@ -73,3 +73,12 @@ When implementing any feature:
 - Build: `xcodebuild -scheme Donna`
 - Test: `swift test`
 - See issues: `/memory` then open development-phases.md
+
+## iOS 18 Modern Patterns
+
+When implementing features, consult `ios18.md` for modern idioms. Key principles:
+- Use Swift Packages for shared code (not file duplication)
+- App Intents are the primary entry point (not Darwin notifications)
+- Live Activities use `Text(timerInterval:)` for real-time updates
+- AudioRecordingManager should be an actor for Swift 6 concurrency
+- Prefer Button(intent:) over URL schemes or notifications

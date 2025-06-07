@@ -198,10 +198,8 @@ struct RecordingRow: View {
                 try audioSession.setCategory(.playback, mode: .default)
                 try audioSession.setActive(true)
                 
-                guard let url = URL(string: recording.audioFilePath) else {
-                    print("Invalid audio file path")
-                    return
-                }
+                // Convert file path string to proper file URL
+                let url = URL(fileURLWithPath: recording.audioFilePath)
                 audioPlayer = try AVAudioPlayer(contentsOf: url)
                 let delegate = AudioPlayerDelegate { 
                     DispatchQueue.main.async {

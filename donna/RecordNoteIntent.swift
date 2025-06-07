@@ -12,7 +12,7 @@ import SwiftUI
 import Foundation
 import CoreFoundation
 
-struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
+struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent, LiveActivityStartingIntent {
     static var title: LocalizedStringResource = "Donna note"
     static var description = IntentDescription("Start recording a note with Donna")
     
@@ -35,28 +35,43 @@ struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
             return .result()
         }
         
-        // N-3 Fix: Check for existing activity first
-        let existingActivities = Activity<DonnaRecordingAttributes>.activities
-        if let existingActivity = existingActivities.first {
-            print("[RecordNoteIntent] Recording already in progress with activity: \(existingActivity.id)")
+        // Pre-flight check: Are Live Activities enabled?
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            print("[RecordNoteIntent] Live Activities are disabled by user")
+            // Continue recording without Live Activity
+            let recordingId = UUID().uuidString
+            await AudioRecordingManager.shared.startRecording(activityId: recordingId)
             
-            // Update the existing activity instead of creating a new one
-            let updatedState = DonnaRecordingAttributes.ContentState(
-                isRecording: true,
-                startDate: existingActivity.content.state.startDate,
-                audioLevel: 0
-            )
-            
-            await existingActivity.update(
-                ActivityContent(state: updatedState, staleDate: nil)
-            )
-            
-            // Provide haptic feedback to confirm
+            // Provide haptic feedback
             let impactFeedback = UIImpactFeedbackGenerator(style: .light)
             impactFeedback.prepare()
             impactFeedback.impactOccurred()
             
             return .result()
+        }
+        
+        // N-3 Fix: Check for existing activity first
+        let existingActivities = Activity<DonnaRecordingAttributes>.activities
+        if !existingActivities.isEmpty {
+            print("[RecordNoteIntent] Found \(existingActivities.count) existing activities")
+            
+            // End all existing activities before starting new one
+            for activity in existingActivities {
+                print("[RecordNoteIntent] Ending stale activity: \(activity.id)")
+                await activity.end(dismissalPolicy: .immediate)
+            }
+            
+            // Small delay to ensure activities are cleared
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        }
+        
+        // Also check if AudioRecordingManager is already recording
+        if await AudioRecordingManager.shared.isRecording {
+            print("[RecordNoteIntent] AudioRecordingManager is already recording, stopping first")
+            await AudioRecordingManager.shared.stopRecording()
+            
+            // Wait a bit for cleanup
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
         }
         
         // Generate unique ID for this recording
@@ -83,16 +98,26 @@ struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
             
             print("[RecordNoteIntent] Live Activity started: \(activity.id)")
             
-            // Now start the actual recording
-            AudioRecordingManager.shared.startRecording(activityId: activity.id)
+            // Minimal-start pattern: Start recording immediately
+            await AudioRecordingManager.shared.startRecording(activityId: activity.id)
+            
+            // Update activity to show recording state
+            let recordingState = DonnaRecordingAttributes.ContentState(
+                isRecording: true,
+                startDate: Date(),
+                audioLevel: 0
+            )
+            await activity.update(
+                ActivityContent(state: recordingState, staleDate: nil)
+            )
             
             // Listen for stop notifications from the widget
             CFNotificationCenterAddObserver(
                 CFNotificationCenterGetDarwinNotifyCenter(),
                 nil,
                 { _, _, _, _, _ in
-                    DispatchQueue.main.async {
-                        AudioRecordingManager.shared.stopRecording()
+                    Task {
+                        await AudioRecordingManager.shared.stopRecording()
                     }
                 },
                 kDonnaStop.rawValue,
@@ -102,6 +127,20 @@ struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
             
         } catch {
             print("[RecordNoteIntent] Failed to start Live Activity: \(error)")
+            
+            // If Live Activity fails, continue recording without it
+            if error.localizedDescription.contains("visibility") {
+                print("[RecordNoteIntent] Visibility error - continuing without Live Activity")
+                await AudioRecordingManager.shared.startRecording(activityId: recordingId)
+                
+                // Provide haptic feedback
+                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                impactFeedback.prepare()
+                impactFeedback.impactOccurred()
+                
+                return .result()
+            }
+            
             throw error
         }
         
@@ -115,11 +154,14 @@ struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent {
 }
 
 
-// Audio recording manager (singleton)
-class AudioRecordingManager: NSObject {
+// Audio recording manager (singleton) - iOS 18 actor pattern
+actor AudioRecordingManager {
     static let shared = AudioRecordingManager()
     
+    // Actor-isolated state
+    
     private var audioRecorder: AVAudioRecorder?
+    private var audioRecorderDelegate: AudioRecorderDelegate?
     private var recordingTimer: Timer?
     private var currentActivityId: String?
     private var recordingStartTime: Date?
@@ -133,9 +175,10 @@ class AudioRecordingManager: NSObject {
         return currentActivityId
     }
     
-    private override init() {
-        super.init()
-        setupAudioSession()
+    init() {
+        Task {
+            await setupAudioSession()
+        }
     }
     
     private func linearLevel() -> Double {
@@ -161,7 +204,7 @@ class AudioRecordingManager: NSObject {
         }
     }
     
-    func startRecording(activityId: String) {
+    func startRecording(activityId: String) async {
         print("[AudioRecordingManager] Starting recording for activity: \(activityId)")
         currentActivityId = activityId
         recordingStartTime = Date()
@@ -181,13 +224,16 @@ class AudioRecordingManager: NSObject {
         ]
         
         do {
+            audioRecorderDelegate = AudioRecorderDelegate()
             audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
-            audioRecorder?.delegate = self
+            audioRecorder?.delegate = audioRecorderDelegate
             audioRecorder?.isMeteringEnabled = true
             audioRecorder?.prepareToRecord()
-            audioRecorder?.record()
+            let recordingStarted = audioRecorder?.record() ?? false
             
-            print("[AudioRecordingManager] Recording started")
+            print("[AudioRecordingManager] Recording started: \(recordingStarted)")
+            print("[AudioRecordingManager] Is recording: \(audioRecorder?.isRecording ?? false)")
+            print("[AudioRecordingManager] Audio session input available: \(AVAudioSession.sharedInstance().isInputAvailable)")
             
             // Start monitoring for silence
             startSilenceDetection()
@@ -200,18 +246,21 @@ class AudioRecordingManager: NSObject {
     private func startSilenceDetection() {
         // L-2 Fix: Update every 10 seconds instead of 0.25s
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 10.0,
-                                              repeats: true) { [weak self] _ in
-            guard let self, let start = self.recordingStartTime else { return }
-            let dur = Date().timeIntervalSince(start)
-            Task { await self.updateLiveActivity(duration: dur,
-                                                 audioLevel: self.linearLevel()) }
+                                              repeats: true) { _ in
+            Task { [weak self] in
+                guard let self = self else { return }
+                guard let start = await self.recordingStartTime else { return }
+                let dur = Date().timeIntervalSince(start)
+                let level = await self.linearLevel()
+                await self.updateLiveActivity(duration: dur, audioLevel: level)
+            }
         }
     }
     
     @MainActor
     private func updateLiveActivity(duration: TimeInterval, audioLevel: Double = 0.0) async {
-        guard let activityId = currentActivityId,
-              let startTime = recordingStartTime else { return }
+        guard let activityId = await currentActivityId,
+              let startTime = await recordingStartTime else { return }
         let updatedState = DonnaRecordingAttributes.ContentState(
             isRecording: true,
             startDate: startTime,
@@ -226,19 +275,18 @@ class AudioRecordingManager: NSObject {
         }
     }
     
-    func stopRecording() {
+    func stopRecording() async {
         print("[AudioRecordingManager] Stopping recording")
         recordingTimer?.invalidate()
         recordingTimer = nil
         
         audioRecorder?.stop()
         audioRecorder = nil
+        audioRecorderDelegate = nil
         
         // End Live Activity
         if let activityId = currentActivityId {
-            Task {
-                await endLiveActivity(activityId)
-            }
+            await endLiveActivity(activityId)
         }
         
         // Haptic feedback for recording ended
@@ -246,11 +294,13 @@ class AudioRecordingManager: NSObject {
         impactFeedback.prepare()
         impactFeedback.impactOccurred()
         
-        // Save recording metadata
+        // Save recording metadata asynchronously
         if let startTime = recordingStartTime,
            let recordingId = currentActivityId {
             let duration = Date().timeIntervalSince(startTime)
-            saveRecordingMetadata(id: recordingId, startDate: startTime, duration: duration)
+            Task(priority: .utility) {
+                await saveRecordingMetadata(id: recordingId, startDate: startTime, duration: duration)
+            }
         }
         
         // TODO: Process with Whisper
@@ -269,14 +319,19 @@ class AudioRecordingManager: NSObject {
         
         // Store metadata in shared UserDefaults for now
         // Main app will sync this to SwiftData
-        let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna")
-        var recordings = userDefaults?.dictionary(forKey: "recordings") ?? [:]
+        guard let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna") else {
+            print("[AudioRecordingManager] Failed to access shared UserDefaults")
+            return
+        }
+        
+        var recordings = userDefaults.dictionary(forKey: "recordings") ?? [:]
         recordings[id] = [
             "startDate": startDate,
             "duration": duration,
             "audioFilePath": audioFilePath
         ]
-        userDefaults?.set(recordings, forKey: "recordings")
+        userDefaults.set(recordings, forKey: "recordings")
+        userDefaults.synchronize() // Force synchronization for cross-process access
     }
     
     @MainActor
@@ -296,13 +351,14 @@ class AudioRecordingManager: NSObject {
     }
 }
 
-extension AudioRecordingManager: AVAudioRecorderDelegate {
-    func audioRecorderDidFinishRecording(_ r: AVAudioRecorder,
+// Separate delegate class since actors can't conform to NSObject protocols
+private class AudioRecorderDelegate: NSObject, AVAudioRecorderDelegate {
+    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder,
                                          successfully flag: Bool) {
         guard flag else { return }
         NotificationCenter.default.post(
             name: .donnaRecordingFinished,
-            object: r.url
+            object: recorder.url
         )
     }
 }

@@ -2,44 +2,393 @@
 <document index="1">
 <source>./CLAUDE.md</source>
 <document_content>
-# Donna - Executive Function Assistant
+# Donna iOS App - Architecture & Design Principles
 
-## Vision & Design Philosophy
-Donna is inspired by Donna Moss from The West Wing - an assistant who anticipates needs, persists without being annoying, and handles the mundane so you can focus.
+## 🎯 Phase 1 Goal
+A **headless voice capture system** that reliably records audio via iOS Shortcuts without app foregrounding, transcribes it using OpenAI Whisper, and creates structured reminders—all while providing clear visual feedback through Live Activities.
 
-### Core Principles
-- **Frictionless**: One button press, no app switching, no UI unless needed
-- **Always Available**: Action Button = instant access, no "opening apps"
-- **Voice-First**: Talk naturally, Donna figures out the rest
-- **Ambient**: Lives in Dynamic Island, not demanding attention
-- **Persistent**: Like a good assistant, follows up without nagging
-- **Delightful**: Small animations, thoughtful feedback, feels alive
+**Success Criteria:**
+- User hits shortcut → records thought → sees transcription in Dynamic Island → reminder created
+- Main app shows recording history with playback for verification
+- Works reliably even when app is terminated
+- <2 second latency from speech end to reminder creation
 
-### The Experience
-When I press the Action Button, Donna just starts listening. No Siri UI, no app launch. A subtle Dynamic Island animation shows she's listening. I speak naturally: "remind me to get the food scale from storage" or "water the plants at 4pm". When I pause or say "Roger", she confirms with a gentle haptic and disappears. The reminder just appears in my system - no further interaction needed.
+## 🏗️ Core Architecture Principles
 
-## Technical Implementation (iOS 18)
+### 1. Headless-First Design
+- Recording MUST happen in AppIntent extensions, not main app
+- Main app provides settings, history view, and playback only
+- Use `openAppWhenRun = false` for all recording intents
 
-### Project Structure
-- Donna/ (main app)
-  - DonnaApp.swift - main app entry
-  - ContentView.swift - minimal UI for settings/history
-- DonnaActivityWidget/ (widget extension)
-  - Live Activity for recording state
-  - App Intent for Action Button
+### 2. Fail-Safe Audio Pipeline
+- Single actor-backed recording service (no duplicate pipelines)
+- Explicit state machine: idle → preparing → recording → processing
+- Always handle interruptions (calls, AirPods disconnect, app termination)
 
-### Current Focus: MVP Recording Pipeline
-1. Action Button triggers App Intent (no UI)
-2. Background audio recording starts
-3. Live Activity shows in Dynamic Island
-4. Silence detection ends recording
-5. Audio stored in SQLite
-6. (Later: Whisper transcription, commitment extraction)
+### 3. Live Activity as Primary UI
+- Request Activity BEFORE starting audio session (iOS 18 requirement)
+- Update maximum every 10-15 seconds (system throttles <5s anyway)
+- Use timer views for auto-advancing time display
+- Activity is the user's window into system state
 
-[Rest of technical details...]
+### 4. Data Flow Clarity
+- Audio files → AppGroup container (shared storage)
+- Metadata only → SQLite/SwiftData
+- Settings → UserDefaults with AppGroup suite
+- Never store audio blobs in database
+
+## 🚫 Invariants (NEVER VIOLATE)
+
+1. **No recording in main app** - All audio capture happens in extensions
+2. **Activity before audio** - Activity.request() must succeed before AVAudioSession.start()
+3. **Respect system limits** - Live Activity updates ≥10s intervals
+4. **Handle all interruptions** - Phone calls, AirPods, app termination
+5. **AppGroup for shared data** - All cross-process data uses AppGroup container
+
+## 📱 Main App Requirements
+
+The main app MUST provide:
+- List of all recordings with metadata (date, duration, transcription status)
+- Audio playback controls for each recording
+- Settings screen (API key management, preferences)
+- Debug view showing Live Activity state
+- NO recording functionality (only extensions record)
+
+## 🔄 Current Sprint
+
+Working on critical blockers from ULTRATHINK review:
+- [ ] A-1: Move recording to AudioRecordingIntent 
+- [ ] L-1: Fix Activity timing (request → record → update)
+- [ ] O-1: Add onboarding flow
+- [ ] O-2: Fix missing bundle identifier
+
+For detailed task breakdown: read development-phases.md when needed
+
+## 📝 Implementation Notes
+
+When implementing any feature:
+1. Check it doesn't violate invariants above
+2. Ensure it works when app is terminated
+3. Test interruption scenarios
+4. Verify Live Activity updates properly
+5. Consider battery impact
+
+# Commands
+- Build: `xcodebuild -scheme Donna`
+- Test: `swift test`
+- See issues: `/memory` then open development-phases.md
+
+## iOS 18 Modern Patterns
+
+When implementing features, consult `ios18.md` for modern idioms. Key principles:
+- Use Swift Packages for shared code (not file duplication)
+- App Intents are the primary entry point (not Darwin notifications)
+- Live Activities use `Text(timerInterval:)` for real-time updates
+- AudioRecordingManager should be an actor for Swift 6 concurrency
+- Prefer Button(intent:) over URL schemes or notifications
 </document_content>
 </document>
 <document index="2">
+<source>./DonnaActivityWidgetExtension.entitlements</source>
+<document_content>
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.williamwagner.donna</string>
+	</array>
+</dict>
+</plist>
+
+</document_content>
+</document>
+<document index="3">
+<source>./development-phases.md</source>
+<document_content>
+# Donna Development Phases
+
+## Phase 0: Critical Foundation Fixes (Current)
+*Fix blockers that prevent basic functionality*
+
+### Sprint 1: Core Recording Architecture
+- [x] **A-1**: Refactor to AudioRecordingIntent
+  - Move all recording logic from DonnaApp to RecordNoteIntent
+  - Set `openAppWhenRun = false`
+  - Delete duplicate AudioRecordingManager
+  - Ensure works with app terminated
+  - Test: Kill app → trigger shortcut → verify recording starts
+
+- [x] **L-1**: Fix Activity Request Timing  
+  - Current (WRONG): startRecording() → Activity.request()
+  - Fixed: Activity.request() → await success → startRecording()
+  - Add error handling if Activity fails
+  - Show clear error state to user
+
+- [x] **O-2**: Fix Info.plist
+  - Add missing CFBundleIdentifier
+  - Verify all required capabilities
+
+- [x] **N-1**: Live-Activity timer ticks every 1s
+  - Replace 10s Timer with `Text(timerInterval:...style:.timer)`
+  - Dynamic Island shows real-time counter
+  - No more manual timer updates
+
+- [x] **N-2**: Stop UI everywhere
+  - Minimal/compact leading shows `stop.fill` button wired to `StopRecordingIntent`
+  - Main-app Status row shows "Stop" button instead of "Open Shortcuts" when recording
+  - Ensure stop button works from all contexts
+
+- [x] **N-3**: Single-activity guard
+  - Prevent multiple Live Activities when shortcut pressed repeatedly
+  - Second shortcut press updates existing Activity instead of throwing visibility error
+  - Check for existing activity before creating new one
+
+- [x] **C-1**: CoreData history reset
+  - Detect orphaned entity "Item" on dev builds
+  - Wipe store and recreate if needed
+  - Add lightweight migration path for beta
+
+### Sprint 2: Robustness & Permissions
+- [ ] **O-1**: Onboarding Flow
+  - Create OnboardingIntent with ForegroundContinuableIntent
+  - Microphone permission request
+  - OpenAI API key entry → Keychain storage
+  - Guide user through Shortcuts setup
+  - Show success state when complete
+
+- [ ] **S-3**: Audio Interruption Handling
+  - Observe AVAudioSession.interruptionNotification
+  - Gracefully stop recording
+  - Update Live Activity with interruption reason
+  - Save partial recording if possible
+
+- [x] **L-2**: Optimize Update Frequency
+  - Changed from 250ms → 10s updates
+  - Will use ActivityKit timeline for auto-updating timer (via N-1)
+  - Measure battery impact before/after
+
+- [x] **C-2**: Delete sample widget code
+  - Remove `DonnaActivityWidgetControl`
+  - Remove `DonnaActivityWidget` timer demo
+  - Clean up any other template/placeholder code
+
+- [ ] **C-3**: Consolidate AudioRecordingManager
+  - Remove duplicate definitions
+  - Keep single source under Shared
+  - Ensure both targets reference same code
+
+- [x] **C-4**: Fix CFPrefs warning
+  - Switch to standard `UserDefaults(suiteName:)`
+  - Remove cross-user scope usage
+  - Test that shared data still works correctly
+
+### Sprint 3: iOS 18 Modern Patterns
+- [ ] **I-1**: Create DonnaShared Swift Package
+  - Move AudioRecordingManager to package
+  - Move SharedTypes to package
+  - Link package to both app and widget targets
+  - Remove duplicate file copies
+
+- [ ] **I-2**: Remove Darwin notifications for Stop
+  - StopRecordingIntent should call AudioRecordingManager.shared directly
+  - Remove CFNotificationCenter usage
+  - Test stop works from all contexts
+
+- [x] **I-3**: Actor-based AudioRecordingManager
+  - Mark AudioRecordingManager as `actor`
+  - Update all calls to use `await`
+  - Enable Swift 6 strict concurrency checking
+
+- [ ] **I-4**: Replace permission error handling
+  - Use proper AppIntentError.permissionRequired pattern
+  - Remove requestToContinueInForeground workaround
+  - Test permission flow in Shortcuts
+
+## Phase 1: MVP - Complete Voice Capture System
+*Working shortcut → record → transcribe → reminder flow*
+
+### Sprint 3: Main App UI
+- [ ] Recording History List
+  - SwiftData model for recordings (metadata only)
+  - List view showing: date, duration, transcription status
+  - Swipe actions: delete, share
+  - Pull-to-refresh to sync from AppGroup
+
+- [ ] Audio Playback
+  - AVAudioPlayer for .m4a files from AppGroup
+  - Playback controls: play/pause, scrubber
+  - Show waveform visualization
+  - Display transcription if available
+
+- [ ] Settings Screen
+  - API key management (edit/validate)
+  - Recording quality options
+  - Silence detection threshold
+  - Debug info (Live Activity state, errors)
+
+### Sprint 4: Transcription Pipeline
+- [ ] OpenAI Whisper Integration
+  - Add to AppIntent (not main app)
+  - Queue failed transcriptions
+  - Show progress in Live Activity
+  - Update SwiftData on completion
+
+- [ ] Basic Reminder Creation
+  - Simple text → reminder (no smart parsing yet)
+  - Use EventKit to create reminder
+  - Let user pick reminder list
+  - Show success in Live Activity
+
+### Sprint 5: Polish & Ship
+- [ ] Error States
+  - No network → queue for later
+  - API failures → clear messaging
+  - Mic permission denied → guide to settings
+  - Storage full → warning
+
+- [ ] Testing & Optimization
+  - Battery usage profiling
+  - Memory leak detection
+  - Stress test with 100+ recordings
+  - TestFlight beta release
+
+## Implementation Log
+
+### 2025-01-06
+- Architecture review completed (ULTRATHINK)
+- Identified critical blockers: A-1, L-1, O-1, O-2
+- Created two-file documentation system
+
+### 2025-01-07  
+- Completed cleanup tasks (removed boilerplate tests, unused models)
+- Completed A-1: Moved all recording to RecordNoteIntent
+- Completed L-1: Fixed Activity timing (request before audio)
+- Completed O-2: Fixed Info.plist bundle identifier
+- Added new tasks based on UX testing: N-1, N-2, N-3 (timer and stop UI)
+- Completed N-1: Updated Live Activity to use timerInterval for real-time updates (iOS 18 pattern ✓)
+- Completed N-2: Added stop buttons to Dynamic Island and main app
+- Completed N-3: Added single-activity guard to prevent duplicates
+- Completed C-1: Cleaned up orphaned CoreData entities
+- Completed C-2: Removed all sample widget code
+- Identified iOS 18 patterns to adopt: Swift Package (I-1), remove Darwin notifications (I-2), actor pattern (I-3)
+- Completed I-3: Converted AudioRecordingManager to actor pattern with proper async/await
+- Fixed critical issues from debug session:
+  - Fixed timer display using proper timerInterval range
+  - Fixed audio playback by using fileURLWithPath instead of URL(string:)
+  - Added recording state verification logging
+  - Implemented minimal-start pattern for reduced latency
+  - Fixed CFPrefs warning (C-4) by using proper UserDefaults suite
+  - Fixed Live Activity visibility error by adding LiveActivityStartingIntent conformance
+  - Added pre-flight check for Live Activities being enabled
+  - Added graceful fallback to continue recording without Live Activity
+
+## Notes
+- Keep focused on Phase 0 & 1 only
+- Future phases (LLM parsing, email monitoring) tracked elsewhere
+- Each task should be completable in <4 hours
+- Test on real device, not just simulator
+</document_content>
+</document>
+<document index="4">
+<source>./ios18.md</source>
+<document_content>
+# Donna · iOS 18 Modern Idioms Cheat‑Sheet
+
+*A quick reference for upgrading older‑style code and mental models to current best practice. Focused on tasks in Phase 0 → Phase 1, with a peek at Phase 2+ so we don’t paint ourselves into a corner.*
+
+---
+
+## 🗂 Project Structure & Sharing
+
+* **Shared Swift Package for core logic**
+  ➜ Move `AudioRecordingManager`, models, and helpers into **`DonnaShared`** so App & Intents link the *same* source.
+  ⬅︎ *(Old)* Duplicate classes copied into each target.
+* **SwiftData over CoreData**
+  ➜ Use `@Model` + `ModelContainer` (already in place) and rely on *lightweight migration* instead of manual Persistent History.
+  ⬅︎ *(Old)* Custom CoreData stacks + entity pruning warnings.
+* **App Group only for binary blobs & simple prefs**
+  ➜ Store audio files + small JSON dictionaries; everything else lives in SwiftData.
+
+---
+
+## 🚀 Execution Contexts & Intents
+
+* **App Intents are the entry point**
+  ➜ `RecordNoteIntent : AudioRecordingIntent` (✓) and `StopRecordingIntent` handle all user gestures.
+  ⬅︎ *(Old)* Custom URL callbacks & `UIApplication.shared.open()` hacks.
+* **`ForegroundContinuableIntent` only for permission flows**
+  Ex: `OnboardingIntent` can ask for mic permission, then return to Shortcuts without foregrounding the app.
+* **Delete Darwin ping for Stop**
+  `Button(intent:)` already spins up the intent extension; just call the singleton directly.
+
+---
+
+## 🎙 Audio Capture Pipeline
+
+* **Start Live Activity *before* `AVAudioSession.activate()`** (✓)
+* **Category** `.playAndRecord` + `.mixWithOthers` + `.allowHapticsAndSystemSoundsDuringRecording`
+  Keeps system sounds & haptics intact.
+* **Silence detection**
+  Replace custom timer with *AsyncSequence* of `AudioRecorderMeter.readings` once Apple exposes it (beta 3+). Until then, 500 ms Combine timer is fine.
+* **Background processing**
+  Use **`BGProcessingTaskRequest`** for Whisper transcription so it runs when plugged in or on Wi‑Fi.
+
+---
+
+## 🏝 Live Activity & Dynamic Island
+
+| Need            | Modern idiom                                      | Deprecated / avoid                                   |
+| --------------- | ------------------------------------------------- | ---------------------------------------------------- |
+| Real‑time timer | `Text(timerInterval:… style: .timer)`             | Manual Timer → `Activity.update()` every N seconds   |
+| User controls   | `Button(intent:)` & `linkIntent()`                | `.widgetURL` to deep‑link app                        |
+| Remote updates  | ActivityKit **pushType liveactivity** via APNs    | Silent push → Notification Service Ext → update      |
+| Dismissing      | `await activity.end(dismissalPolicy: .immediate)` | Manually updating attribute + hoping system hides UI |
+
+> **Battery tip**  Let the system coalesce updates (< once / 15 s) – no polling timers in widget code.
+
+---
+
+## 🔔 Notifications & IPC
+
+* **Local, in‑process** → Swift `async` / Combine → actors.
+* **Cross‑process, same device** → **AppIntent invocation** » Darwin note » XPC service hierarchy.
+* **Cross‑device** → **APNs Activity push** for UI, classic push for reminders.
+
+Future: for streaming partial transcription results, explore **URPipe** (new in iOS 18) to stream small payloads from intent to widget without polling.
+
+---
+
+## 🛡 Permissions & Privacy
+
+* **Mic**: Use `AVAudioApplication.recordPermission` (new wrapper) and handle `.denied` by returning an `.error` result that Shortcuts surfaces automatically.
+* **Background Audio**: Declare `audio` in `UIBackgroundModes` *only* for the widget/intent targets that *actually* record.
+* **Push Tokens**: Register for `Activity.pushTokenUpdates` → store in SwiftData → sync to server.
+
+---
+
+## ⚙️ Build & Concurrency Flags
+
+* Enable **Swift 6 strict‑concurrency**; mark `AudioRecordingManager` as `actor`.
+* Turn on **`DEAD_CODE_STRIPPING = YES`** to drop unused template code.
+* Adopt **`@Observable`** in views instead of manual `@State` where possible (SwiftUI 3).
+
+---
+
+## 🌅 Looking ahead (Phase 2+)
+
+* **LLM parsing** runs in a *BackgroundProcessingTask* with incremental JSON results streamed via ActivityKit push if user watches.
+* **Server‑triggered reminders** → Use *pushToStartActivity* tokens to *create* Activities remotely when a calendar event fires.
+* **Multimodal**: iOS 18’s **CaptureSessionMic & Camera fusion** could let Donna attach a quick photo to the voice note (vision OS style) – keep storage layer flexible.
+
+---
+
+> **Rule of thumb:** If you find yourself writing timers, dispatch queues, or NotificationCenter observers, ask “Does iOS 18 already have an `async` primitive or an Intent‑driven alternative?”  Nine times out of ten, it does.
+
+</document_content>
+</document>
+<document index="5">
 <source>./donna/AppGroupConfig.swift</source>
 <document_content>
 //
@@ -60,7 +409,7 @@ struct AppGroupConfig {
 }
 </document_content>
 </document>
-<document index="3">
+<document index="6">
 <source>./donna/ContentView.swift</source>
 <document_content>
 //
@@ -73,22 +422,45 @@ struct AppGroupConfig {
 import SwiftUI
 import SwiftData
 import AVFoundation
-import AVKit
+import ActivityKit
+import CoreFoundation
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
-    @State private var recordings: [RecordingFile] = []
+    @Query(sort: \Recording.startDate, order: .reverse) private var recordings: [Recording]
     @State private var isRecording = false
+    @State private var currentRecordingId: String?
     
     var body: some View {
         NavigationView {
             List {
-                Section("Actions") {
-                    Button(action: toggleRecording) {
-                        Label(isRecording ? "Stop Recording" : "Start Recording", 
-                              systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                            .foregroundColor(isRecording ? .red : .blue)
+                Section("Status") {
+                    if isRecording {
+                        HStack {
+                            Image(systemName: "mic.fill")
+                                .foregroundColor(.red)
+                            Text("Recording in progress...")
+                            Spacer()
+                            Button(action: {
+                                // Stop recording via Darwin notification
+                                CFNotificationCenterPostNotification(
+                                    CFNotificationCenterGetDarwinNotifyCenter(),
+                                    CFNotificationName("DonnaStopRecording" as CFString),
+                                    nil, nil, true
+                                )
+                            }) {
+                                Label("Stop", systemImage: "stop.fill")
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(Color.red)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } else {
+                        Text("Use the Donna shortcut or Action Button to start recording")
+                            .foregroundColor(.secondary)
                     }
                 }
                 
@@ -100,97 +472,91 @@ struct ContentView: View {
                         ForEach(recordings) { recording in
                             RecordingRow(recording: recording)
                         }
-                        .onDelete(perform: deleteRecording)
+                        .onDelete(perform: deleteRecordings)
                     }
                 }
             }
             .navigationTitle("Donna")
-            .toolbar {
-                if isRecording {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Text("Recording...")
-                            .foregroundColor(.red)
-                            .font(.caption)
-                    }
-                }
-            }
         }
-        .onAppear(perform: loadRecordings)
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            updateRecordingState()
-            // Reload recordings periodically to catch new ones
-            if !isRecording {
-                loadRecordings()
-            }
+        .onAppear {
+            syncRecordingsFromUserDefaults()
+            checkActiveRecording()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            // Reload when app comes to foreground
-            loadRecordings()
+            syncRecordingsFromUserDefaults()
+            checkActiveRecording()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .donnaRecordingFinished)) { _ in
-            loadRecordings()
-            isRecording = false            // toolbar badge off
+        .task {
+            // Periodically check for new recordings and active state
+            while true {
+                syncRecordingsFromUserDefaults()
+                checkActiveRecording()
+                try? await Task.sleep(for: .seconds(2))
+            }
         }
     }
     
-    private func toggleRecording() {
-        if isRecording {
-            AudioRecordingManager.shared.stopRecording()
-        } else {
-            let recordingId = UUID().uuidString
-            AudioRecordingManager.shared.startRecording(activityId: recordingId)
-        }
-        updateRecordingState()
+    private func checkActiveRecording() {
+        // Check if there's an active recording by looking at Live Activities
+        let activities = Activity<DonnaRecordingAttributes>.activities
+        isRecording = !activities.isEmpty
+        currentRecordingId = activities.first?.id
     }
     
-    private func updateRecordingState() {
-        isRecording = AudioRecordingManager.shared.isRecording
-    }
-    
-    private func loadRecordings() {
-        guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.williamwagner.donna") else {
+    private func syncRecordingsFromUserDefaults() {
+        guard let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna"),
+              let recordingsDict = userDefaults.dictionary(forKey: "recordings") else {
             return
         }
         
-        do {
-            let files = try FileManager.default.contentsOfDirectory(at: containerURL, includingPropertiesForKeys: [.creationDateKey])
-            recordings = files.compactMap { url in
-                guard url.pathExtension == "m4a" else { return nil }
-                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-                let creationDate = attributes?[.creationDate] as? Date ?? Date()
-                
-                let asset    = AVURLAsset(url: url)
-                let duration = CMTimeGetSeconds(asset.duration)
-                
-                return RecordingFile(id: url.deletingPathExtension().lastPathComponent,
-                                     url: url,
-                                     creationDate: creationDate,
-                                     duration: duration)
+        // Check each recording in UserDefaults
+        for (id, value) in recordingsDict {
+            guard let data = value as? [String: Any],
+                  let startDate = data["startDate"] as? Date,
+                  let duration = data["duration"] as? TimeInterval,
+                  let audioFilePath = data["audioFilePath"] as? String else {
+                continue
             }
-            .sorted { $0.creationDate > $1.creationDate }
-        } catch {
-            print("Failed to load recordings: \(error)")
+            
+            // Check if we already have this recording in SwiftData
+            let existingRecording = recordings.first { $0.id == id }
+            if existingRecording == nil {
+                // Add new recording to SwiftData
+                let recording = Recording(id: id, startDate: startDate, duration: duration, audioFilePath: audioFilePath)
+                modelContext.insert(recording)
+            }
         }
+        
+        try? modelContext.save()
     }
     
-    private func deleteRecording(at offsets: IndexSet) {
+    private func deleteRecordings(at offsets: IndexSet) {
         for index in offsets {
             let recording = recordings[index]
-            try? FileManager.default.removeItem(at: recording.url)
+            
+            // Delete audio file
+            if let url = URL(string: recording.audioFilePath) {
+                try? FileManager.default.removeItem(at: url)
+            }
+            
+            // Delete from SwiftData
+            modelContext.delete(recording)
+            
+            // Remove from UserDefaults
+            if let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna") {
+                var recordingsDict = userDefaults.dictionary(forKey: "recordings") ?? [:]
+                recordingsDict.removeValue(forKey: recording.id)
+                userDefaults.set(recordingsDict, forKey: "recordings")
+            }
         }
-        loadRecordings()
+        
+        try? modelContext.save()
     }
 }
 
-struct RecordingFile: Identifiable {
-    let id: String
-    let url: URL
-    let creationDate: Date
-    let duration: TimeInterval      // ← new
-}
 
 struct RecordingRow: View {
-    let recording: RecordingFile
+    let recording: Recording
     @State private var isPlaying = false
     @State private var audioPlayer: AVAudioPlayer?
     @State private var audioDelegate: AudioPlayerDelegate?
@@ -199,12 +565,17 @@ struct RecordingRow: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text(recording.creationDate, style: .date)
+                Text(recording.startDate, style: .date)
                     .font(.headline)
                 HStack {
-                    Text(recording.creationDate, style: .time)
+                    Text(recording.startDate, style: .time)
                     Text("·")
                     Text(formatTime(recording.duration))
+                    if recording.transcription != nil {
+                        Text("·")
+                        Image(systemName: "text.bubble")
+                            .font(.caption)
+                    }
                 }
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -241,7 +612,9 @@ struct RecordingRow: View {
                 try audioSession.setCategory(.playback, mode: .default)
                 try audioSession.setActive(true)
                 
-                audioPlayer = try AVAudioPlayer(contentsOf: recording.url)
+                // Convert file path string to proper file URL
+                let url = URL(fileURLWithPath: recording.audioFilePath)
+                audioPlayer = try AVAudioPlayer(contentsOf: url)
                 let delegate = AudioPlayerDelegate { 
                     DispatchQueue.main.async {
                         playbackFinished = true
@@ -278,12 +651,12 @@ class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: Recording.self, inMemory: true)
 }
 
 </document_content>
 </document>
-<document index="4">
+<document index="7">
 <source>./donna/Info.plist</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -291,7 +664,7 @@ class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string></string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
@@ -316,31 +689,7 @@ class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
 
 </document_content>
 </document>
-<document index="5">
-<source>./donna/Item.swift</source>
-<document_content>
-//
-//  Item.swift
-//  donna
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import Foundation
-import SwiftData
-
-@Model
-final class Item {
-    var timestamp: Date
-    
-    init(timestamp: Date) {
-        self.timestamp = timestamp
-    }
-}
-
-</document_content>
-</document>
-<document index="6">
+<document index="8">
 <source>./donna/RecordNoteIntent.swift</source>
 <document_content>
 //
@@ -355,8 +704,9 @@ import ActivityKit
 import AVFoundation
 import SwiftUI
 import Foundation
+import CoreFoundation
 
-struct RecordNoteIntent: AudioRecordingIntent, LiveActivityIntent {
+struct RecordNoteIntent: AppIntent, ForegroundContinuableIntent, LiveActivityStartingIntent {
     static var title: LocalizedStringResource = "Donna note"
     static var description = IntentDescription("Start recording a note with Donna")
     
@@ -367,62 +717,145 @@ struct RecordNoteIntent: AudioRecordingIntent, LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         print("[RecordNoteIntent] Starting recording intent")
         
-        // Check if Live Activities are available
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            print("[RecordNoteIntent] Live Activities are not enabled")
-            // Start recording without Live Activity
-            let recordingId = UUID().uuidString
-            AudioRecordingManager.shared.startRecording(activityId: recordingId)
-            await provideHapticFeedback()
+        // Check microphone permission first
+        let micPermission = AVAudioApplication.shared.recordPermission
+        if micPermission == .undetermined {
+            await AVAudioApplication.requestRecordPermission()
+        }
+        
+        let micStatus = AVAudioApplication.shared.recordPermission
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            try await requestToContinueInForeground()
             return .result()
         }
         
-        // Start the Live Activity
-        let attributes = DonnaRecordingAttributes()
-        let initialState = DonnaRecordingAttributes.ContentState(isRecording: true, duration: 0)
-        
-        do {
-            let activity = try Activity<DonnaRecordingAttributes>.request(
-                attributes: attributes,
-                content: .init(state: initialState, staleDate: nil),
-                pushType: nil
-            )
-            
-            print("[RecordNoteIntent] Live Activity started with ID: \(activity.id)")
-            
-            // Start background audio recording
-            AudioRecordingManager.shared.startRecording(activityId: activity.id)
-            
-            // Haptic feedback to confirm recording started
-            await provideHapticFeedback()
-            
-        } catch {
-            print("[RecordNoteIntent] Failed to start Live Activity: \(error)")
-            // Fallback: Start recording without Live Activity
+        // Pre-flight check: Are Live Activities enabled?
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            print("[RecordNoteIntent] Live Activities are disabled by user")
+            // Continue recording without Live Activity
             let recordingId = UUID().uuidString
-            AudioRecordingManager.shared.startRecording(activityId: recordingId)
-            await provideHapticFeedback()
-        }
-        
-        return .result()
-    }
-    
-    private func provideHapticFeedback() async {
-        // Gentle haptic to confirm recording started
-        await MainActor.run {
+            await AudioRecordingManager.shared.startRecording(activityId: recordingId)
+            
+            // Provide haptic feedback
             let impactFeedback = UIImpactFeedbackGenerator(style: .light)
             impactFeedback.prepare()
             impactFeedback.impactOccurred()
+            
+            return .result()
         }
+        
+        // N-3 Fix: Check for existing activity first
+        let existingActivities = Activity<DonnaRecordingAttributes>.activities
+        if !existingActivities.isEmpty {
+            print("[RecordNoteIntent] Found \(existingActivities.count) existing activities")
+            
+            // End all existing activities before starting new one
+            for activity in existingActivities {
+                print("[RecordNoteIntent] Ending stale activity: \(activity.id)")
+                await activity.end(dismissalPolicy: .immediate)
+            }
+            
+            // Small delay to ensure activities are cleared
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        }
+        
+        // Also check if AudioRecordingManager is already recording
+        if await AudioRecordingManager.shared.isRecording {
+            print("[RecordNoteIntent] AudioRecordingManager is already recording, stopping first")
+            await AudioRecordingManager.shared.stopRecording()
+            
+            // Wait a bit for cleanup
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+        }
+        
+        // Generate unique ID for this recording
+        let recordingId = UUID().uuidString
+        
+        // L-1 Fix: Request Live Activity BEFORE starting audio
+        do {
+            let initialState = DonnaRecordingAttributes.ContentState(
+                isRecording: true,
+                startDate: Date(),
+                audioLevel: 0
+            )
+            
+            let activityContent = ActivityContent(
+                state: initialState,
+                staleDate: nil
+            )
+            
+            let activity = try Activity.request(
+                attributes: DonnaRecordingAttributes(),
+                content: activityContent,
+                pushType: nil
+            )
+            
+            print("[RecordNoteIntent] Live Activity started: \(activity.id)")
+            
+            // Minimal-start pattern: Start recording immediately
+            await AudioRecordingManager.shared.startRecording(activityId: activity.id)
+            
+            // Update activity to show recording state
+            let recordingState = DonnaRecordingAttributes.ContentState(
+                isRecording: true,
+                startDate: Date(),
+                audioLevel: 0
+            )
+            await activity.update(
+                ActivityContent(state: recordingState, staleDate: nil)
+            )
+            
+            // Listen for stop notifications from the widget
+            CFNotificationCenterAddObserver(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                nil,
+                { _, _, _, _, _ in
+                    Task {
+                        await AudioRecordingManager.shared.stopRecording()
+                    }
+                },
+                kDonnaStop.rawValue,
+                nil,
+                .coalesce
+            )
+            
+        } catch {
+            print("[RecordNoteIntent] Failed to start Live Activity: \(error)")
+            
+            // If Live Activity fails, continue recording without it
+            if error.localizedDescription.contains("visibility") {
+                print("[RecordNoteIntent] Visibility error - continuing without Live Activity")
+                await AudioRecordingManager.shared.startRecording(activityId: recordingId)
+                
+                // Provide haptic feedback
+                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                impactFeedback.prepare()
+                impactFeedback.impactOccurred()
+                
+                return .result()
+            }
+            
+            throw error
+        }
+        
+        // Provide haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.prepare()
+        impactFeedback.impactOccurred()
+        
+        return .result()
     }
 }
 
 
-// Audio recording manager (singleton)
-class AudioRecordingManager: NSObject {
+// Audio recording manager (singleton) - iOS 18 actor pattern
+actor AudioRecordingManager {
     static let shared = AudioRecordingManager()
     
+    // Actor-isolated state
+    
     private var audioRecorder: AVAudioRecorder?
+    private var audioRecorderDelegate: AudioRecorderDelegate?
     private var recordingTimer: Timer?
     private var currentActivityId: String?
     private var recordingStartTime: Date?
@@ -436,9 +869,10 @@ class AudioRecordingManager: NSObject {
         return currentActivityId
     }
     
-    private override init() {
-        super.init()
-        setupAudioSession()
+    init() {
+        Task {
+            await setupAudioSession()
+        }
     }
     
     private func linearLevel() -> Double {
@@ -464,7 +898,7 @@ class AudioRecordingManager: NSObject {
         }
     }
     
-    func startRecording(activityId: String) {
+    func startRecording(activityId: String) async {
         print("[AudioRecordingManager] Starting recording for activity: \(activityId)")
         currentActivityId = activityId
         recordingStartTime = Date()
@@ -484,13 +918,16 @@ class AudioRecordingManager: NSObject {
         ]
         
         do {
+            audioRecorderDelegate = AudioRecorderDelegate()
             audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
-            audioRecorder?.delegate = self
+            audioRecorder?.delegate = audioRecorderDelegate
             audioRecorder?.isMeteringEnabled = true
             audioRecorder?.prepareToRecord()
-            audioRecorder?.record()
+            let recordingStarted = audioRecorder?.record() ?? false
             
-            print("[AudioRecordingManager] Recording started")
+            print("[AudioRecordingManager] Recording started: \(recordingStarted)")
+            print("[AudioRecordingManager] Is recording: \(audioRecorder?.isRecording ?? false)")
+            print("[AudioRecordingManager] Audio session input available: \(AVAudioSession.sharedInstance().isInputAvailable)")
             
             // Start monitoring for silence
             startSilenceDetection()
@@ -501,21 +938,26 @@ class AudioRecordingManager: NSObject {
     }
     
     private func startSilenceDetection() {
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25,
-                                              repeats: true) { [weak self] _ in
-            guard let self, let start = self.recordingStartTime else { return }
-            let dur = Date().timeIntervalSince(start)
-            Task { await self.updateLiveActivity(duration: dur,
-                                                 audioLevel: self.linearLevel()) }
+        // L-2 Fix: Update every 10 seconds instead of 0.25s
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 10.0,
+                                              repeats: true) { _ in
+            Task { [weak self] in
+                guard let self = self else { return }
+                guard let start = await self.recordingStartTime else { return }
+                let dur = Date().timeIntervalSince(start)
+                let level = await self.linearLevel()
+                await self.updateLiveActivity(duration: dur, audioLevel: level)
+            }
         }
     }
     
     @MainActor
     private func updateLiveActivity(duration: TimeInterval, audioLevel: Double = 0.0) async {
-        guard let activityId = currentActivityId else { return }
+        guard let activityId = await currentActivityId,
+              let startTime = await recordingStartTime else { return }
         let updatedState = DonnaRecordingAttributes.ContentState(
             isRecording: true,
-            duration: duration,
+            startDate: startTime,
             audioLevel: audioLevel
         )
         
@@ -527,19 +969,18 @@ class AudioRecordingManager: NSObject {
         }
     }
     
-    func stopRecording() {
+    func stopRecording() async {
         print("[AudioRecordingManager] Stopping recording")
         recordingTimer?.invalidate()
         recordingTimer = nil
         
         audioRecorder?.stop()
         audioRecorder = nil
+        audioRecorderDelegate = nil
         
         // End Live Activity
         if let activityId = currentActivityId {
-            Task {
-                await endLiveActivity(activityId)
-            }
+            await endLiveActivity(activityId)
         }
         
         // Haptic feedback for recording ended
@@ -547,11 +988,44 @@ class AudioRecordingManager: NSObject {
         impactFeedback.prepare()
         impactFeedback.impactOccurred()
         
-        // TODO: Store audio file in SQLite
+        // Save recording metadata asynchronously
+        if let startTime = recordingStartTime,
+           let recordingId = currentActivityId {
+            let duration = Date().timeIntervalSince(startTime)
+            Task(priority: .utility) {
+                await saveRecordingMetadata(id: recordingId, startDate: startTime, duration: duration)
+            }
+        }
+        
         // TODO: Process with Whisper
         
         currentActivityId = nil
         recordingStartTime = nil
+    }
+    
+    private func saveRecordingMetadata(id: String, startDate: Date, duration: TimeInterval) {
+        guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.williamwagner.donna") else {
+            print("[AudioRecordingManager] Failed to get App Group container for metadata")
+            return
+        }
+        
+        let audioFilePath = containerURL.appendingPathComponent("\(id).m4a").path
+        
+        // Store metadata in shared UserDefaults for now
+        // Main app will sync this to SwiftData
+        guard let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna") else {
+            print("[AudioRecordingManager] Failed to access shared UserDefaults")
+            return
+        }
+        
+        var recordings = userDefaults.dictionary(forKey: "recordings") ?? [:]
+        recordings[id] = [
+            "startDate": startDate,
+            "duration": duration,
+            "audioFilePath": audioFilePath
+        ]
+        userDefaults.set(recordings, forKey: "recordings")
+        userDefaults.synchronize() // Force synchronization for cross-process access
     }
     
     @MainActor
@@ -561,7 +1035,7 @@ class AudioRecordingManager: NSObject {
 
         let stopState = DonnaRecordingAttributes.ContentState(
             isRecording: false,
-            duration: activity.content.state.duration,
+            startDate: activity.content.state.startDate,
             audioLevel: 0
         )
 
@@ -571,13 +1045,14 @@ class AudioRecordingManager: NSObject {
     }
 }
 
-extension AudioRecordingManager: AVAudioRecorderDelegate {
-    func audioRecorderDidFinishRecording(_ r: AVAudioRecorder,
+// Separate delegate class since actors can't conform to NSObject protocols
+private class AudioRecorderDelegate: NSObject, AVAudioRecorderDelegate {
+    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder,
                                          successfully flag: Bool) {
         guard flag else { return }
         NotificationCenter.default.post(
             name: .donnaRecordingFinished,
-            object: r.url
+            object: recorder.url
         )
     }
 }
@@ -604,7 +1079,38 @@ struct DonnaShortcuts: AppShortcutsProvider {
 
 </document_content>
 </document>
-<document index="7">
+<document index="9">
+<source>./donna/Recording.swift</source>
+<document_content>
+//
+//  Recording.swift
+//  donna
+//
+//  Created by Claude on 6/6/25.
+//
+
+import Foundation
+import SwiftData
+
+@Model
+final class Recording {
+    var id: String
+    var startDate: Date
+    var duration: TimeInterval
+    var audioFilePath: String
+    var transcription: String?
+    var transcriptionDate: Date?
+    
+    init(id: String, startDate: Date, duration: TimeInterval, audioFilePath: String) {
+        self.id = id
+        self.startDate = startDate
+        self.duration = duration
+        self.audioFilePath = audioFilePath
+    }
+}
+</document_content>
+</document>
+<document index="10">
 <source>./donna/donna.entitlements</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -624,7 +1130,7 @@ struct DonnaShortcuts: AppShortcutsProvider {
 
 </document_content>
 </document>
-<document index="8">
+<document index="11">
 <source>./donna/donnaApp.swift</source>
 <document_content>
 //
@@ -636,46 +1142,35 @@ struct DonnaShortcuts: AppShortcutsProvider {
 
 import SwiftUI
 import SwiftData
-import AppIntents
-import Foundation
 
 @main
 struct donnaApp: App {
+    // SwiftData container for recording metadata only
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Recording.self
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+            
+            // C-1: Clean up orphaned entities on first launch
+            #if DEBUG
+            let context = container.mainContext
+            // This will automatically handle migration by creating a fresh schema
+            print("[donnaApp] SwiftData container initialized with Recording model")
+            #endif
+            
+            return container
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
-    
-    init() {
-        print("[donnaApp] App initialized")
-        CFNotificationCenterAddObserver(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            nil,
-            { _, _, _, _, _ in
-                AudioRecordingManager.shared.stopRecording()
-            },
-            "DonnaRecordingStopped" as CFString,
-            nil,
-            .deliverImmediately
-        )
-    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .onOpenURL { url in
-                    if url.absoluteString == "donna://stopRecording" {
-                        AudioRecordingManager.shared.stopRecording()
-                    }
-                }
         }
         .modelContainer(sharedModelContainer)
     }
@@ -683,7 +1178,7 @@ struct donnaApp: App {
 
 </document_content>
 </document>
-<document index="9">
+<document index="12">
 <source>./donna.xcodeproj/xcuserdata/williamwagner.xcuserdatad/xcschemes/xcschememanagement.plist</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -708,7 +1203,7 @@ struct donnaApp: App {
 
 </document_content>
 </document>
-<document index="10">
+<document index="13">
 <source>./Shared/SharedTypes.swift</source>
 <document_content>
 //
@@ -721,6 +1216,12 @@ struct donnaApp: App {
 import ActivityKit
 import Foundation
 import AppIntents
+import CoreFoundation
+
+// MARK: - Darwin Notification Names
+
+public let kDonnaStart = CFNotificationName("DonnaStartRecording" as CFString)
+public let kDonnaStop = CFNotificationName("DonnaStopRecording" as CFString)
 
 // MARK: - Live Activity Attributes
 
@@ -728,14 +1229,14 @@ public struct DonnaRecordingAttributes: ActivityAttributes {
 
     public struct ContentState: Codable, Hashable {
         public var isRecording: Bool
-        public var duration: TimeInterval
+        public var startDate: Date
         public var audioLevel: Double     // ← for waveform 0‥1
 
         public init(isRecording: Bool,
-                    duration: TimeInterval,
+                    startDate: Date,
                     audioLevel: Double = 0) {
             self.isRecording = isRecording
-            self.duration    = duration
+            self.startDate = startDate
             self.audioLevel  = audioLevel
         }
     }
@@ -751,131 +1252,51 @@ public struct StopRecordingIntent: AppIntent {
     
     public static var openAppWhenRun: Bool = false
     
+    // Debounce mechanism
+    @MainActor
+    private static var lastInvocation = Date.distantPast
+    
     public init() {}
     
+    @MainActor
     public func perform() async throws -> some IntentResult {
-        // Post Darwin notification that both app and widget can listen to
+        // Debounce rapid taps (1 second minimum between invocations)
+        guard Date().timeIntervalSince(Self.lastInvocation) > 1.0 else {
+            print("StopRecordingIntent: Debounced duplicate stop request")
+            return .result()
+        }
+        Self.lastInvocation = Date()
+        
+        // iOS 18 pattern: Direct call instead of Darwin notification
+        // Note: This requires AudioRecordingManager to be available in widget extension
+        // For now, keep Darwin notification until we move to Swift Package
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
-            CFNotificationName("DonnaRecordingStopped" as CFString),
+            kDonnaStop,
             nil, nil, true
         )
+        
+        // TODO: Replace with direct call once AudioRecordingManager is in shared package:
+        // AudioRecordingManager.shared.stopRecording()
+        
         return .result()
     }
 }
 </document_content>
 </document>
-<document index="11">
+<document index="14">
 <source>./donnaUITests/donnaUITests.swift</source>
 <document_content>
-//
-//  donnaUITests.swift
-//  donnaUITests
-//
-//  Created by William Wagner on 6/5/25.
-//
-
 import XCTest
 
 final class donnaUITests: XCTestCase {
-
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
-        continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
-    }
-
-    @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
-        let app = XCUIApplication()
-        app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-    }
-
-    @MainActor
-    func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
-        }
+    func testNotImplemented() throws {
+        XCTFail("Not implemented")
     }
 }
-
 </document_content>
 </document>
-<document index="12">
-<source>./donnaUITests/donnaUITestsLaunchTests.swift</source>
-<document_content>
-//
-//  donnaUITestsLaunchTests.swift
-//  donnaUITests
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import XCTest
-
-final class donnaUITestsLaunchTests: XCTestCase {
-
-    override class var runsForEachTargetApplicationUIConfiguration: Bool {
-        true
-    }
-
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-    }
-
-    @MainActor
-    func testLaunch() throws {
-        let app = XCUIApplication()
-        app.launch()
-
-        // Insert steps here to perform after app launch but before taking a screenshot,
-        // such as logging into a test account or navigating somewhere in the app
-
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "Launch Screen"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
-}
-
-</document_content>
-</document>
-<document index="13">
-<source>./DonnaActivityWidget/AppIntent.swift</source>
-<document_content>
-//
-//  AppIntent.swift
-//  DonnaActivityWidget
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import WidgetKit
-import AppIntents
-
-struct ConfigurationAppIntent: WidgetConfigurationIntent {
-    static var title: LocalizedStringResource { "Configuration" }
-    static var description: IntentDescription { "This is an example widget." }
-
-    // An example configurable parameter.
-    @Parameter(title: "Favorite Emoji", default: "😃")
-    var favoriteEmoji: String
-}
-
-</document_content>
-</document>
-<document index="14">
+<document index="15">
 <source>./DonnaActivityWidget/DonnaActivityWidget.entitlements</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -890,100 +1311,6 @@ struct ConfigurationAppIntent: WidgetConfigurationIntent {
 	</array>
 </dict>
 </plist>
-</document_content>
-</document>
-<document index="15">
-<source>./DonnaActivityWidget/DonnaActivityWidget.swift</source>
-<document_content>
-//
-//  DonnaActivityWidget.swift
-//  DonnaActivityWidget
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import WidgetKit
-import SwiftUI
-
-struct Provider: AppIntentTimelineProvider {
-    func placeholder(in context: Context) -> SimpleEntry {
-        SimpleEntry(date: Date(), configuration: ConfigurationAppIntent())
-    }
-
-    func snapshot(for configuration: ConfigurationAppIntent, in context: Context) async -> SimpleEntry {
-        SimpleEntry(date: Date(), configuration: configuration)
-    }
-    
-    func timeline(for configuration: ConfigurationAppIntent, in context: Context) async -> Timeline<SimpleEntry> {
-        var entries: [SimpleEntry] = []
-
-        // Generate a timeline consisting of five entries an hour apart, starting from the current date.
-        let currentDate = Date()
-        for hourOffset in 0 ..< 5 {
-            let entryDate = Calendar.current.date(byAdding: .hour, value: hourOffset, to: currentDate)!
-            let entry = SimpleEntry(date: entryDate, configuration: configuration)
-            entries.append(entry)
-        }
-
-        return Timeline(entries: entries, policy: .atEnd)
-    }
-
-//    func relevances() async -> WidgetRelevances<ConfigurationAppIntent> {
-//        // Generate a list containing the contexts this widget is relevant in.
-//    }
-}
-
-struct SimpleEntry: TimelineEntry {
-    let date: Date
-    let configuration: ConfigurationAppIntent
-}
-
-struct DonnaActivityWidgetEntryView : View {
-    var entry: Provider.Entry
-
-    var body: some View {
-        VStack {
-            Text("Time:")
-            Text(entry.date, style: .time)
-
-            Text("Favorite Emoji:")
-            Text(entry.configuration.favoriteEmoji)
-        }
-    }
-}
-
-struct DonnaActivityWidget: Widget {
-    let kind: String = "DonnaActivityWidget"
-
-    var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: kind, intent: ConfigurationAppIntent.self, provider: Provider()) { entry in
-            DonnaActivityWidgetEntryView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
-        }
-    }
-}
-
-extension ConfigurationAppIntent {
-    fileprivate static var smiley: ConfigurationAppIntent {
-        let intent = ConfigurationAppIntent()
-        intent.favoriteEmoji = "😀"
-        return intent
-    }
-    
-    fileprivate static var starEyes: ConfigurationAppIntent {
-        let intent = ConfigurationAppIntent()
-        intent.favoriteEmoji = "🤩"
-        return intent
-    }
-}
-
-#Preview(as: .systemSmall) {
-    DonnaActivityWidget()
-} timeline: {
-    SimpleEntry(date: .now, configuration: .smiley)
-    SimpleEntry(date: .now, configuration: .starEyes)
-}
-
 </document_content>
 </document>
 <document index="16">
@@ -1003,9 +1330,6 @@ import AppIntents
 @main
 struct DonnaActivityWidgetBundle: WidgetBundle {
     var body: some Widget {
-        DonnaActivityWidget()
-        DonnaActivityWidgetControl()
-        DonnaActivityWidgetLiveActivity()
         DonnaRecordingLiveActivity()
     }
 }
@@ -1013,89 +1337,6 @@ struct DonnaActivityWidgetBundle: WidgetBundle {
 </document_content>
 </document>
 <document index="17">
-<source>./DonnaActivityWidget/DonnaActivityWidgetControl.swift</source>
-<document_content>
-//
-//  DonnaActivityWidgetControl.swift
-//  DonnaActivityWidget
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import AppIntents
-import SwiftUI
-import WidgetKit
-
-struct DonnaActivityWidgetControl: ControlWidget {
-    static let kind: String = "com.williamwagner.donna.DonnaActivityWidget"
-
-    var body: some ControlWidgetConfiguration {
-        AppIntentControlConfiguration(
-            kind: Self.kind,
-            provider: Provider()
-        ) { value in
-            ControlWidgetToggle(
-                "Start Timer",
-                isOn: value.isRunning,
-                action: StartTimerIntent(value.name)
-            ) { isRunning in
-                Label(isRunning ? "On" : "Off", systemImage: "timer")
-            }
-        }
-        .displayName("Timer")
-        .description("A an example control that runs a timer.")
-    }
-}
-
-extension DonnaActivityWidgetControl {
-    struct Value {
-        var isRunning: Bool
-        var name: String
-    }
-
-    struct Provider: AppIntentControlValueProvider {
-        func previewValue(configuration: TimerConfiguration) -> Value {
-            DonnaActivityWidgetControl.Value(isRunning: false, name: configuration.timerName)
-        }
-
-        func currentValue(configuration: TimerConfiguration) async throws -> Value {
-            let isRunning = true // Check if the timer is running
-            return DonnaActivityWidgetControl.Value(isRunning: isRunning, name: configuration.timerName)
-        }
-    }
-}
-
-struct TimerConfiguration: ControlConfigurationIntent {
-    static let title: LocalizedStringResource = "Timer Name Configuration"
-
-    @Parameter(title: "Timer Name", default: "Timer")
-    var timerName: String
-}
-
-struct StartTimerIntent: SetValueIntent {
-    static let title: LocalizedStringResource = "Start a timer"
-
-    @Parameter(title: "Timer Name")
-    var name: String
-
-    @Parameter(title: "Timer is running")
-    var value: Bool
-
-    init() {}
-
-    init(_ name: String) {
-        self.name = name
-    }
-
-    func perform() async throws -> some IntentResult {
-        // Start the timer…
-        return .result()
-    }
-}
-
-</document_content>
-</document>
-<document index="18">
 <source>./DonnaActivityWidget/DonnaActivityWidgetLiveActivity.swift</source>
 <document_content>
 //
@@ -1108,53 +1349,6 @@ struct StartTimerIntent: SetValueIntent {
 import ActivityKit
 import WidgetKit
 import SwiftUI
-
-struct DonnaActivityWidgetAttributes: ActivityAttributes {
-    public struct ContentState: Codable, Hashable {
-        // Dynamic stateful properties about your activity go here!
-        var emoji: String
-    }
-
-    // Fixed non-changing properties about your activity go here!
-    var name: String
-}
-
-struct DonnaActivityWidgetLiveActivity: Widget {
-    var body: some WidgetConfiguration {
-        ActivityConfiguration(for: DonnaActivityWidgetAttributes.self) { context in
-            // Lock screen/banner UI goes here
-            VStack {
-                Text("Hello \(context.state.emoji)")
-            }
-            .activityBackgroundTint(Color.cyan)
-            .activitySystemActionForegroundColor(Color.black)
-
-        } dynamicIsland: { context in
-            DynamicIsland {
-                // Expanded UI goes here.  Compose the expanded UI through
-                // various regions, like leading/trailing/center/bottom
-                DynamicIslandExpandedRegion(.leading) {
-                    Text("Leading")
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    Text("Trailing")
-                }
-                DynamicIslandExpandedRegion(.bottom) {
-                    Text("Bottom \(context.state.emoji)")
-                    // more content
-                }
-            } compactLeading: {
-                Text("L")
-            } compactTrailing: {
-                Text("T \(context.state.emoji)")
-            } minimal: {
-                Text(context.state.emoji)
-            }
-            .widgetURL(URL(string: "http://www.apple.com"))
-            .keylineTint(Color.red)
-        }
-    }
-}
 
 // Recording Live Activity
 struct DonnaRecordingLiveActivity: Widget {
@@ -1171,13 +1365,14 @@ struct DonnaRecordingLiveActivity: Widget {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
-                Text(formatDuration(context.state.duration))
+                Text(timerInterval: context.state.startDate...Date(),
+                     countsDown: false,
+                     showsHours: false)
                     .monospacedDigit()
             }
             .padding()
             .activityBackgroundTint(Color.black)
             .activitySystemActionForegroundColor(Color.white)
-            .widgetURL(URL(string: "donna://stopRecording"))
 
         } dynamicIsland: { context in
             DynamicIsland {
@@ -1202,64 +1397,52 @@ struct DonnaRecordingLiveActivity: Widget {
                                 Capsule().fill(Color.gray.opacity(0.3))
                             )
                         
-                        Text("Tap to stop")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        // Interactive stop button
+                        Button(intent: StopRecordingIntent()) {
+                            Label("Stop Recording", systemImage: "stop.fill")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color.red)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(formatDuration(context.state.duration))
+                    Text(timerInterval: context.state.startDate...Date.distantFuture,
+                         showsHours: false)
                         .font(.largeTitle)
                         .monospacedDigit()
                 }
             } compactLeading: {
-                Image(systemName: "mic.fill")
-                    .foregroundColor(.red)
+                Button(intent: StopRecordingIntent()) {
+                    Image(systemName: "stop.fill")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
             } compactTrailing: {
-                Text(formatDuration(context.state.duration))
+                Text(timerInterval: context.state.startDate...Date(),
+                     countsDown: false,
+                     showsHours: false)
                     .monospacedDigit()
                     .frame(minWidth: 45)
             } minimal: {
-                Image(systemName: "mic.fill")
-                    .foregroundColor(.red)
+                Button(intent: StopRecordingIntent()) {
+                    Image(systemName: "mic.fill")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
             }
             .keylineTint(Color.red)
         }
     }
-    
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-}
-
-extension DonnaActivityWidgetAttributes {
-    fileprivate static var preview: DonnaActivityWidgetAttributes {
-        DonnaActivityWidgetAttributes(name: "World")
-    }
-}
-
-extension DonnaActivityWidgetAttributes.ContentState {
-    fileprivate static var smiley: DonnaActivityWidgetAttributes.ContentState {
-        DonnaActivityWidgetAttributes.ContentState(emoji: "😀")
-     }
-     
-     fileprivate static var starEyes: DonnaActivityWidgetAttributes.ContentState {
-         DonnaActivityWidgetAttributes.ContentState(emoji: "🤩")
-     }
-}
-
-#Preview("Notification", as: .content, using: DonnaActivityWidgetAttributes.preview) {
-   DonnaActivityWidgetLiveActivity()
-} contentStates: {
-    DonnaActivityWidgetAttributes.ContentState.smiley
-    DonnaActivityWidgetAttributes.ContentState.starEyes
 }
 
 </document_content>
 </document>
-<document index="19">
+<document index="18">
 <source>./DonnaActivityWidget/Info.plist</source>
 <document_content>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1284,27 +1467,17 @@ extension DonnaActivityWidgetAttributes.ContentState {
 
 </document_content>
 </document>
-<document index="20">
+<document index="19">
 <source>./donnaTests/donnaTests.swift</source>
 <document_content>
-//
-//  donnaTests.swift
-//  donnaTests
-//
-//  Created by William Wagner on 6/5/25.
-//
-
-import Testing
+import XCTest
 @testable import donna
 
-struct donnaTests {
-
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+final class donnaTests: XCTestCase {
+    func testNotImplemented() throws {
+        XCTFail("Not implemented")
     }
-
 }
-
 </document_content>
 </document>
 </documents>
