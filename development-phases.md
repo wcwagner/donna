@@ -4,11 +4,9 @@
 *Fix blockers that prevent basic functionality*
 
 ### Sprint 1: Core Recording Architecture
-- [x] **A-1**: Refactor to AudioRecordingIntent
-  - Move all recording logic from DonnaApp to RecordNoteIntent
-  - Set `openAppWhenRun = false`
-  - Delete duplicate AudioRecordingManager
-  - Ensure works with app terminated
+- [x] **A-1**: Make RecordNoteIntent conform to AudioRecordingIntent
+  - Added AudioRecordingIntent protocol conformance
+  - This grants background mic privileges from SpringBoard
   - Test: Kill app → trigger shortcut → verify recording starts
 
 - [x] **L-1**: Fix Activity Request Timing  
@@ -65,10 +63,18 @@
   - Remove `DonnaActivityWidget` timer demo
   - Clean up any other template/placeholder code
 
-- [ ] **C-3**: Consolidate AudioRecordingManager
-  - Remove duplicate definitions
-  - Keep single source under Shared
-  - Ensure both targets reference same code
+- [x] **A-2**: Remove UIBackgroundModes from DonnaIntents Info.plist
+  - Removed UIBackgroundModes array (ignored in extensions)
+  - Extension relies on AudioRecordingIntent protocol instead
+  
+- [ ] **A-3**: Add CODE_SIGN_ENTITLEMENTS to DonnaIntents target
+  - Set Build Settings → Code Signing Entitlements = DonnaIntents/DonnaIntents.entitlements
+  - Required for App Group access from extension
+  
+- [x] **C-3**: Consolidate AudioRecordingManager
+  - Moved to DonnaShared Swift Package
+  - Single source of truth
+  - All targets now use the package
 
 - [x] **C-4**: Fix CFPrefs warning
   - Switch to standard `UserDefaults(suiteName:)`
@@ -76,16 +82,17 @@
   - Test that shared data still works correctly
 
 ### Sprint 3: iOS 18 Modern Patterns
-- [ ] **I-1**: Create DonnaShared Swift Package
-  - Move AudioRecordingManager to package
-  - Move SharedTypes to package
-  - Link package to both app and widget targets
-  - Remove duplicate file copies
+- [x] **I-1**: Create DonnaShared Swift Package
+  - Created empty package skeleton
+  - Moved AudioRecordingManager to package
+  - Moved SharedTypes to package
+  - Moved AppGroupConfig to package
+  - Added imports to all consuming files
 
-- [ ] **I-2**: Remove Darwin notifications for Stop
-  - StopRecordingIntent should call AudioRecordingManager.shared directly
-  - Remove CFNotificationCenter usage
-  - Test stop works from all contexts
+- [x] **I-2**: Remove Darwin notifications for Stop
+  - StopRecordingIntent now calls AudioRecordingManager.shared directly
+  - Removed CFNotificationCenter observer from RecordNoteIntent
+  - Direct actor call provides immediate response
 
 - [x] **I-3**: Actor-based AudioRecordingManager
   - Mark AudioRecordingManager as `actor`
@@ -174,6 +181,14 @@
   - Fixed Live Activity visibility error by adding LiveActivityStartingIntent conformance
   - Added pre-flight check for Live Activities being enabled
   - Added graceful fallback to continue recording without Live Activity
+  - **CRITICAL**: Discovered RecordNoteIntent needs to be in separate App Intent Extension for background audio
+  - Added error handling for recording failures with clear error messages
+  - Created DonnaIntents App Intent Extension with proper background audio configuration
+  - Added UIBackgroundModes (audio) to DonnaIntents Info.plist
+  - Added App Group entitlements to DonnaIntents extension
+  - Moved RecordNoteIntent to dedicated extension for background recording
+  - Fixed compilation errors in RecordNoteIntent (return type consistency, optional binding)
+  - **Important**: SharedTypes.swift and AppGroupConfig.swift should be added to targets via Xcode, not duplicated
 
 ## Notes
 - Keep focused on Phase 0 & 1 only

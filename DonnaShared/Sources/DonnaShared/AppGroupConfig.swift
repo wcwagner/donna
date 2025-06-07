@@ -7,10 +7,10 @@
 
 import Foundation
 
-struct AppGroupConfig {
-    static let identifier = "group.com.williamwagner.donna"
+public struct AppGroupConfig {
+    public static let identifier = "group.com.williamwagner.donna"
     
-    static var sharedContainerURL: URL? {
+    public static var sharedContainerURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
     }
 }

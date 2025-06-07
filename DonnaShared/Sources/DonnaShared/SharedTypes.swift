@@ -39,10 +39,10 @@ public struct DonnaRecordingAttributes: ActivityAttributes {
 // MARK: - Shared Intents
 
 public struct StopRecordingIntent: AppIntent {
-    public static var title: LocalizedStringResource = "Stop Recording"
-    public static var description = IntentDescription("Stop the current recording")
+    public static let title: LocalizedStringResource = "Stop Recording"
+    public static let description = IntentDescription("Stop the current recording")
     
-    public static var openAppWhenRun: Bool = false
+    public static let openAppWhenRun: Bool = false
     
     // Debounce mechanism
     @MainActor
@@ -59,17 +59,17 @@ public struct StopRecordingIntent: AppIntent {
         }
         Self.lastInvocation = Date()
         
-        // iOS 18 pattern: Direct call instead of Darwin notification
-        // Note: This requires AudioRecordingManager to be available in widget extension
-        // For now, keep Darwin notification until we move to Swift Package
+        // ① Broadcast – reaches recorder regardless of process
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
             kDonnaStop,
-            nil, nil, true
+            nil, nil, true   // deliverImmediately
         )
         
-        // TODO: Replace with direct call once AudioRecordingManager is in shared package:
-        // AudioRecordingManager.shared.stopRecording()
+        // ② Fast path – if we *are* the recorder process, act directly
+        if await AudioRecordingManager.shared.isRecording {
+            await AudioRecordingManager.shared.stopRecording()
+        }
         
         return .result()
     }

@@ -8,6 +8,7 @@
 import ActivityKit
 import WidgetKit
 import SwiftUI
+import DonnaShared
 
 // Recording Live Activity
 struct DonnaRecordingLiveActivity: Widget {

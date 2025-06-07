@@ -10,6 +10,7 @@ import SwiftData
 import AVFoundation
 import ActivityKit
 import CoreFoundation
+import DonnaShared
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -27,14 +28,7 @@ struct ContentView: View {
                                 .foregroundColor(.red)
                             Text("Recording in progress...")
                             Spacer()
-                            Button(action: {
-                                // Stop recording via Darwin notification
-                                CFNotificationCenterPostNotification(
-                                    CFNotificationCenterGetDarwinNotifyCenter(),
-                                    CFNotificationName("DonnaStopRecording" as CFString),
-                                    nil, nil, true
-                                )
-                            }) {
+                            Button(intent: StopRecordingIntent()) {
                                 Label("Stop", systemImage: "stop.fill")
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 12)
@@ -90,7 +84,7 @@ struct ContentView: View {
     }
     
     private func syncRecordingsFromUserDefaults() {
-        guard let userDefaults = UserDefaults(suiteName: "group.com.williamwagner.donna"),
+        guard let userDefaults = UserDefaults(suiteName: AppGroupConfig.identifier),
               let recordingsDict = userDefaults.dictionary(forKey: "recordings") else {
             return
         }
