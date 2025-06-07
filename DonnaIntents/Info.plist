@@ -11,5 +11,9 @@
 	<string>Donna needs microphone access to record your notes and reminders</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 </dict>
 </plist>
