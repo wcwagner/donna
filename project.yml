@@ -1,22 +1,64 @@
 name: Donna
+
 options:
   bundleIdPrefix: com.williamwagner
+
+# ------------------------------------------------------------
+#  Swift-PM packages available to all targets
+# ------------------------------------------------------------
+packages:
+  Donna:                       # logical name (arbitrary)
+    path: "."                  # local package – root contains Package.swift
+
+# ------------------------------------------------------------
+#  Xcode targets
+# ------------------------------------------------------------
 targets:
   DonnaApp.iOS:
     type: application
     platform: iOS
-    sources: []           # all code comes from SwiftPM
-    info: Apps/DonnaApp.iOS/Info.plist
+    sources: []                # all code comes from SwiftPM
     resources:
       - Apps/DonnaApp.iOS/Assets.xcassets
-    entitlements: Apps/DonnaApp.iOS/DonnaApp.entitlements
+
+    info:                      # plist overrides that XcodeGen merges
+      path: Apps/DonnaApp.iOS/Info.plist
+      properties:
+        NSMicrophoneUsageDescription: "Donna records audio locally on-device."
+        NSSpeechRecognitionUsageDescription: >
+          Used for on-device transcription; nothing leaves the device.
+        UIBackgroundModes:      # must be lower-case "audio"
+          - audio
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+
+    entitlements:
+      path: Apps/DonnaApp.iOS/DonnaApp.entitlements
+      entitlements:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-only: true
+        com.apple.security.application-groups: group.com.williamwagner.donna
+
+    # ---- Swift-PM dependencies (products) ----
     dependencies:
-      - package: DonnaKit
-      - package: DonnaIntents
+      - package: Donna
+        product: DonnaShared
+      - package: Donna
+        product: DonnaIntents
+      - package: Donna
+        product: DonnaCore
+
   DonnaWidget:
     type: app-extension
     platform: iOS
-    sources: Extensions/DonnaWidget/Sources
-    info: Extensions/DonnaWidget/Info.plist
+    sources:
+      - Extensions/DonnaWidget/Sources
+
+    info:
+      path: Extensions/DonnaWidget/Info.plist
+
     dependencies:
-      - package: DonnaKit
+      - package: Donna
+        product: DonnaShared
+      - package: Donna
+        product: DonnaIntents

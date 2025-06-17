@@ -1,3 +1,37 @@
 xcuserdata/
 *.xcuserstate
 .build/
+
+# ------------------------------------------------------------
+#  XcodeGen-generated project + workspace
+#  (recreate anytime with `make generate`)
+# ------------------------------------------------------------
+Donna.xcodeproj/
+*.xcworkspace/
+
+# ------------------------------------------------------------
+#  Per-user clutter created by Xcode
+# ------------------------------------------------------------
+**/*.xcuserdata/
+**/*.xcuserstate
+*.xcscmblueprint
+*.xcresult/
+
+# ------------------------------------------------------------
+#  Build artefacts
+# ------------------------------------------------------------
+.build/                 # SwiftPM cache
+DerivedData/            # xcodebuild output
+Build/                  # older Xcode versions
+.bundle/                # possible Bundler dir
+.swiftpm/xcode/         # SPM-to-Xcode glue
+*.swp
+*.tmp
+*.log
+
+# ------------------------------------------------------------
+#  macOS & editor noise
+# ------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
