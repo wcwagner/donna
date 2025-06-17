@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Donna records audio locally on-device.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Used for on-device transcription; nothing leaves the device.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+    <key>NSSupportsLiveActivities</key>
+    <true/>
+    <key>NSSupportsLiveActivitiesFrequentUpdates</key>
+    <true/>      <!-- doubles the push budget to 8/15min -->
+    <key>UIApplicationSceneManifest</key>
+</dict>
+</plist>

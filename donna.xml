@@ -1,0 +1,2159 @@
+<documents>
+<document index="1">
+<source>./ARCHITECTURE.md</source>
+<document_content>
+# Donna iOS 26 Architecture Guide - Production Edition v2
+
+## Overview
+
+Donna is a voice-first recording app designed for users with ADHD, leveraging iOS 26’s new App Intents capabilities to provide a seamless, distraction-free recording experience. This architecture guide captures not just the technical design, but the hard-won lessons and platform constraints that shaped our decisions, now enhanced with critical platform engineering feedback.
+
+**Target Platform**: iOS 26+ exclusively (leveraging SpeechAnalyzer, direct AAC streaming, and enhanced App Intents)
+
+## The Journey to This Architecture
+
+Building a recording app that works seamlessly with Siri, Live Activities, and background audio requires navigating numerous iOS platform constraints. Through extensive review, testing, and platform engineering validation, we’ve discovered critical implementation details that aren’t always obvious from Apple’s documentation.
+
+## Core Architecture Principles
+
+### 1. Voice-First, Minimal UI
+
+**Design Decision**: Primary interactions through Siri, Action Button, and Control Center rather than traditional UI.
+
+**Rationale**: ADHD users need instant capture with zero friction. Opening an app, navigating UI, and pressing buttons creates opportunities for distraction and forgetting the original thought.
+
+**Trade-offs**:
+
+- Requires mastering App Intents, which have their own lifecycle complexities
+- Must handle intent execution across different surfaces (Siri, Shortcuts, Action Button)
+- UI becomes secondary, making some features less discoverable
+
+### 2. State Management Strategy
+
+We use a hybrid approach that emerged from several key constraints:
+
+**Actor for Recording Core**: Thread-safe management of AVAudioSession and recording state
+
+- **Why**: AVAudioEngine taps fire on the render thread, creating potential race conditions
+- **Alternative considered**: @MainActor everywhere, but this would block UI during audio processing
+
+**Protocol-Based Dependencies**: Clean separation between modules
+
+- **Why**: Widget extensions have strict memory limits (≤16MB) and can’t link heavy frameworks
+- **Alternative considered**: Shared framework, but this bloated the widget extension
+
+**Value Types for Data Flow**: Intent parameters and results use simple types
+
+- **Why**: Intents run in separate processes and need Sendable data
+- **Alternative considered**: Reference types with careful synchronization, but this was error-prone
+
+## Module Structure and Boundaries
+
+```
+# Module Structure (Single Package.swift)
+
+Package.swift defines these library products:
+- DonnaProtocols → Pure protocol definitions
+- DonnaCore     → AVFAudio, Speech, Combine (actors, no UI)
+- DonnaKit      → SwiftUI views, App Intents
+- DonnaIntents  → AppIntent types
+
+Bundle targets (managed by XcodeGen):
+- Apps/DonnaApp.iOS      → Main app bundle
+- Extensions/DonnaWidget → Live Activity + WidgetKit
+- Extensions/DonnaSnippetExt → App Intent snippets
+```
+
+### Critical Insight: App Intents Package Compilation
+
+**Discovery**: App-Intents Swift Packages are built into the main app bundle, not as separate extensions. This means types visible to both the package and main target are available process-wide.
+
+**Implication**: Once registered in `AppDependencyManager`, the package can resolve dependencies from the main app, solving our cross-module dependency injection concerns.
+
+```swift
+// In main app startup
+AppDependencyManager.shared.add { AudioRecorderManager() as AudioRecordingService }
+
+// In intent (DonnaKit package)
+@Dependency var audioRecorder: AudioRecordingService  // Just works!
+```
+
+## Platform Requirements and Configuration
+
+### Complete Info.plist Configuration
+
+```xml
+<key>NSMicrophoneUsageDescription</key>
+<string>Donna records audio locally on-device.</string>
+<key>NSSpeechRecognitionUsageDescription</key>
+<string>Used for on-device transcription; nothing leaves the device.</string>
+<key>UIBackgroundModes</key>
+<array>
+    <string>audio</string>
+</array>
+<key>NSSupportsLiveActivities</key>
+<true/>
+<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+<true/>      <!-- doubles the push budget to 8/15min -->
+<key>UIApplicationSceneManifest</key>
+<!-- standard SwiftUI scene dictionary -->
+```
+
+### Required Capabilities
+
+In Xcode project settings:
+
+- **Background Modes** → Audio, AirPlay, & Picture in Picture
+- **App Intents** (adds com.apple.developer.siri entitlement)
+- **App Groups** if the widget needs shared preferences
+
+### App Store Review Compliance Checklist
+
+The binary scanner specifically checks for:
+
+- ✅ Both `NSMicrophoneUsageDescription` and `UIBackgroundModes=audio` present
+- ✅ No private symbols (~os_proc_available_memory~, ~_task_info_private~)
+- ✅ Live Activities ContentState < 4KB gzipped
+- ✅ Background audio provides visible user benefit (recording app ✓)
+- ✅ Privacy strings mention “local” or “on-device” processing
+- ✅ No network sockets open while recording (or reviewer asks “where is audio going?”)
+
+## Recording File Flow
+
+> **Platform Engineer Note**: “Document the file flow with markers, temporary files, sequences of actions so less experienced developers can understand this nuanced flow.”
+
+### Complete Recording Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Recording File Flow                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. START RECORDING                                              │
+│     ├─→ Create marker file (.inProgress)                        │
+│     ├─→ Create M4A file handle (direct AAC)                     │
+│     └─→ Start Live Activity                                     │
+│                                                                  │
+│  2. DURING RECORDING                                             │
+│     ├─→ Audio buffers arrive (43x/second)                       │
+│     ├─→ Convert to Data (Sendability)                          │
+│     ├─→ Queue in FileCoordinator                               │
+│     └─→ Write AAC frames directly (~250ms batches)             │
+│                                                                  │
+│  3. STOP RECORDING                                               │
+│     ├─→ Flush remaining buffers                                 │
+│     ├─→ Close AAC file handle                                   │
+│     ├─→ Atomic rename .tmp → final                             │
+│     └─→ Update marker (.complete)                               │
+│                                                                  │
+│  4. CRASH RECOVERY                                               │
+│     ├─→ Find .inProgress markers                                │
+│     ├─→ Check Live Activity state                               │
+│     ├─→ Validate M4A integrity                                  │
+│     └─→ Finalize or discard                                     │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Directory Structure
+
+```
+App Container/
+├── tmp/                              # During recording
+│   └── recording-UUID.m4a.tmp       # Direct AAC writing
+│
+├── Library/
+│   └── RecordingMarkers/            # Transaction log
+│       └── UUID.marker              # JSON: {id, state, startTime, activityId}
+│
+└── Documents/
+    └── Recordings/                  # Final recordings (iCloud synced)
+        └── UUID.m4a                 # Completed audio
+```
+
+### Why This Flow?
+
+1. **Marker files** act as a transaction log - they tell us a recording was attempted even if no audio was written
+2. **Direct AAC writing** eliminates the CAF→M4A export step (35% latency reduction)
+3. **Two-phase commit** (.tmp → atomic rename) prevents corruption even with direct AAC
+4. **Crash recovery** can identify partial recordings using markers + Live Activity state
+
+## Key Components with Implementation Wisdom
+
+### 1. AudioRecordingService Protocol (DonnaKit)
+
+```swift
+public protocol AudioRecordingService: Sendable {
+    var currentSession: RecordingSession? { get async }
+    
+    func start() async throws -> SessionToken
+    func stop(_ token: SessionToken) async throws -> CompletedRecording
+    func stopCurrent() async throws -> CompletedRecording?  // For parameter-less intent
+    func pause(_ token: SessionToken) async
+    func resume(_ token: SessionToken) async
+    func audioLevelStream(for token: SessionToken) -> AsyncStream<Float>?
+    
+    // For hardware event fast path
+    nonisolated func setToggleHint()
+}
+```
+
+**Design Decision**: Verb-specific methods instead of single `handle(action:)` pattern.
+
+**Rationale**:
+
+- Compile-time exhaustiveness checking
+- Impossible to pass wrong session ID at compile time
+- Each method signature expresses exactly what it needs
+
+### 2. AudioRecorderManager Actor - Thread Safety the Hard Way
+
+The actor pattern emerged from a specific iOS constraint: AVAudioEngine taps fire on the render thread.
+
+> **Platform Engineer Fix**: “AVAudioPCMBuffer is not Sendable. Convert to Data on the audio thread before crossing actor boundaries.”
+
+```swift
+actor AudioRecorderManager: AudioRecordingService {
+    private var _currentSession: RecordingSession?
+    private var toggleHint = AtomicBool(false)  // For hardware event fast path
+    
+    // Correct property exposure for protocol conformance
+    nonisolated var currentSession: RecordingSession? {
+        // Platform Engineer: "Can't use stored properties with @Dependency"
+        actorIsolated { _currentSession }
+    }
+    
+    private func actorIsolated<T>(_ body: () -> T) -> T { body() }
+    
+    private func configureAudioSession() async throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, 
+                               options: [.duckOthers, .mixWithOthers, .allowBluetoothA2DP])
+        
+        // Platform Engineer: ".allowBluetoothA2DP ignored unless route already A2DP"
+        // Subscribe to route changes to reapply
+        NotificationCenter.default.addObserver(
+            self, 
+            selector: #selector(handleRouteChange),
+            name: AVAudioSession.routeChangeNotification,
+            object: session
+        )
+    }
+    
+    @objc nonisolated func handleRouteChange(_ note: Notification) {
+        Task {
+            // Reapply category to pick up new route capabilities
+            await self.configureAudioSession()
+        }
+    }
+    
+    // Fast path for hardware events
+    nonisolated func setToggleHint() {
+        toggleHint.store(true)
+    }
+    
+    private func setupAudioEngine() throws {
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.inputFormat(forBus: 0)
+        
+        // Platform Engineer: "512-frame taps shave 5-7ms on A14+"
+        let bufferSize: AVAudioFrameCount = ProcessInfo.processInfo.processorCount >= 8 ? 512 : 1024
+        
+        // Tap 1: Write to file (via FileCoordinator)
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: recordingFormat) { 
+            [weak self] buffer, time in
+            guard let self else { return }
+            
+            // Platform Engineer: "Freeze buffer to Data for Sendability"
+            let data = buffer.toData()
+            
+            // Check hardware toggle hint (fast path)
+            if self.toggleHint.exchange(false) {
+                Task { await self.stopCurrent() }
+                return
+            }
+            
+            Task { await self.processAudioBuffer(data, time: time) }
+        }
+        
+        // Tap 2: Feed transcriber (configured separately)
+    }
+    
+    private func processAudioBuffer(_ pcmData: Data, time: AVAudioTime) async {
+        guard let session = _currentSession else { return }
+        
+        // Enqueue file write to FileCoordinator
+        await fileCoordinator.enqueue(.appendAudio(id: session.id, pcmData: pcmData))
+        
+        // Check memory pressure
+        if let footprint = currentFootprint(), footprint.availMemory < 8_000_000 {
+            await fileCoordinator.flushAllBuffers()
+        }
+    }
+}
+
+// Platform Engineer: "Convert inside the tap before crossing boundaries"
+extension AVAudioPCMBuffer {
+    func toData() -> Data {
+        let audioBuffer = self.audioBufferList.pointee.mBuffers
+        let size = Int(audioBuffer.mDataByteSize)
+        
+        guard let ptr = audioBuffer.mData else {
+            return Data()
+        }
+        
+        return Data(bytes: ptr, count: size)
+    }
+}
+```
+
+### 3. Memory Monitoring (Public API)
+
+> **Platform Engineer**: “Replace os_proc_available_memory() with public task_vm_info”
+
+```swift
+import MachO
+
+struct MemoryFootprint: Sendable {
+    var physFootprint: UInt64   // Jetsam uses this
+    var residentSize: UInt64    // RPRVT in Instruments
+    var availMemory: UInt64     // System-wide free RAM
+}
+
+func currentFootprint() -> MemoryFootprint? {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout.size(ofValue: info) / MemoryLayout<Int32>.size)
+    
+    let kr = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_,
+                      task_flavor_t(TASK_VM_INFO),
+                      $0,
+                      &count)
+        }
+    }
+    guard kr == KERN_SUCCESS else { return nil }
+    
+    // Get free pages via sysctl
+    var freePages: UInt64 = 0
+    var size = MemoryLayout<UInt64>.size
+    var mib: [Int32] = [CTL_VM, VM_PAGE_FREE_COUNT]
+    sysctl(&mib, 2, &freePages, &size, nil, 0)
+    
+    let pageSize = UInt64(vm_kernel_page_size)
+    
+    return MemoryFootprint(
+        physFootprint: info.phys_footprint,
+        residentSize: info.resident_size,
+        availMemory: freePages * pageSize
+    )
+}
+
+// Platform Engineer memory thresholds:
+// physFootprint < 45MB (A17), < 30MB (A12)
+// availMemory < 8MB → flush caches immediately
+```
+
+### 4. FileCoordinator Actor - Isolated File I/O with AsyncChannel
+
+> **Platform Engineer**: “Avoid unbounded detached tasks with AsyncChannel”
+
+```swift
+actor FileCoordinator {
+    struct Job: Sendable {
+        enum Kind {
+            case writeMarker(id: UUID, marker: RecordingMarker)
+            case appendAudio(id: UUID, pcmData: Data)  // Data is Sendable
+            case finalize(id: UUID, dest: URL)
+            case cleanupTempDir
+        }
+        let kind: Kind
+    }
+    
+    private var channel = AsyncChannel<Job>()
+    private var audioBuffers: [UUID: [Data]] = [:]
+    private var audioFiles: [UUID: AVAudioFile] = [:]
+    
+    init() {
+        // Single worker processes jobs sequentially
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            for await job in self.channel {
+                do {
+                    try await self.process(job)
+                } catch {
+                    print("FileCoordinator error: \(error)")
+                }
+            }
+        }
+    }
+    
+    func enqueue(_ job: Job) async {
+        await channel.send(job)
+    }
+    
+    func flushAllBuffers() async {
+        for id in audioBuffers.keys {
+            try? await flushBuffers(for: id)
+        }
+    }
+    
+    private func process(_ job: Job) async throws {
+        switch job.kind {
+        case .writeMarker(let id, let marker):
+            let url = markerDirectory.appendingPathComponent("\(id).marker")
+            let data = try JSONEncoder().encode(marker)
+            try data.write(to: url, options: .atomic)
+            
+        case .appendAudio(let id, let pcmData):
+            audioBuffers[id, default: []].append(pcmData)
+            
+            // Platform Engineer: "10 buffers ≈ 160KB is safe"
+            if audioBuffers[id]!.count >= 10 {
+                try await flushBuffers(for: id)
+            }
+            
+        case .finalize(let id, let dest):
+            // Flush remaining buffers
+            try await flushBuffers(for: id)
+            
+            // Close the audio file
+            audioFiles[id] = nil
+            
+            // Two-phase commit still needed for crash safety
+            let tempM4A = tempDirectory.appendingPathComponent("\(id).m4a.tmp")
+            
+            // Atomic move
+            try FileManager.default.moveItem(at: tempM4A, to: dest)
+            
+            // Update marker to complete
+            let markerURL = markerDirectory.appendingPathComponent("\(id).marker")
+            if var marker = try? JSONDecoder().decode(RecordingMarker.self, 
+                                                      from: Data(contentsOf: markerURL)) {
+                marker.state = .complete
+                let data = try JSONEncoder().encode(marker)
+                try data.write(to: markerURL, options: .atomic)
+            }
+            
+            // Cleanup
+            audioBuffers[id] = nil
+            
+        case .cleanupTempDir:
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: tempDirectory, 
+                includingPropertiesForKeys: [.creationDateKey]
+            )
+            for url in contents where url.pathExtension == "tmp" {
+                if let date = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate,
+                   Date().timeIntervalSince(date) > 86400 {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+        }
+    }
+    
+    private func flushBuffers(for id: UUID) async throws {
+        guard let buffers = audioBuffers[id], !buffers.isEmpty else { return }
+        
+        // Get or create audio file with direct AAC streaming
+        if audioFiles[id] == nil {
+            let url = tempDirectory.appendingPathComponent("\(id).m4a.tmp")
+            audioFiles[id] = try makeStreamingAACFile(url: url)
+        }
+        
+        let file = audioFiles[id]!
+        
+        // Write all buffered data
+        for pcmData in buffers {
+            let buffer = pcmData.toPCMBuffer(format: file.processingFormat)
+            try file.write(from: buffer)
+        }
+        
+        audioBuffers[id] = []
+    }
+}
+
+// Platform Engineer: "Direct AAC streaming - no CAF intermediate"
+func makeStreamingAACFile(url: URL,
+                          sampleRate: Double = 44_100,
+                          channels: AVAudioChannelCount = 1) throws -> AVAudioFile {
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatMPEG4AAC,
+        AVSampleRateKey: sampleRate,
+        AVNumberOfChannelsKey: channels,
+        AVEncoderBitRateKey: 128_000,
+        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+        // Platform Engineer: "15% smaller files, no quality loss"
+        AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_VariableConstrained
+    ]
+    
+    return try AVAudioFile(forWriting: url,
+                           settings: settings,
+                           commonFormat: .pcmFormatFloat32,
+                           interleaved: false)
+}
+```
+
+### 5. Swift Concurrency Patterns
+
+> **Platform Engineer**: “Document Sendability decisions for audio apps”
+
+#### When to Use What
+
+|Scenario                         |Solution                         |
+|---------------------------------|---------------------------------|
+|Value is immutable (Data, UUID)  |Automatic Sendable conformance   |
+|Reference type with mutable state|Keep isolated to its actor       |
+|Non-Sendable Core Audio type     |Convert to Data before crossing  |
+|Hardware event routing           |All work through single actor hop|
+
+#### Data Extension for Reconstitution
+
+```swift
+extension Data {
+    func toPCMBuffer(format: AVAudioFormat) -> AVAudioPCMBuffer {
+        let frameCapacity = UInt32(count) / format.streamDescription.pointee.mBytesPerFrame
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity)!
+        buffer.frameLength = frameCapacity
+        
+        self.withUnsafeBytes { bytes in
+            let audioBuffer = buffer.audioBufferList.pointee.mBuffers
+            memcpy(audioBuffer.mData, bytes.baseAddress, count)
+        }
+        
+        return buffer
+    }
+}
+```
+
+### 6. App Intents and Hardware Integration
+
+> **Platform Engineer**: “Stop must exist parameter-less. Add @MainActor to view-returning intents.”
+
+```swift
+// Parameter-less stop intent for hardware triggers
+@MainActor  // Required for ShowsSnippetView
+struct StopCurrentRecordingIntent: AppIntent {
+    static let title: LocalizedStringResource = "Stop Current Recording"
+    static var parameterSummary: some ParameterSummary {
+        Summary("Stop the current recording")
+    }
+    
+    @Dependency var audioRecorder: AudioRecordingService
+    
+    func perform() async throws -> some IntentResult & ShowsSnippetView {
+        if let recording = try await audioRecorder.stopCurrent() {
+            return .result() {
+                RecordingCompleteView(recording: recording)
+            }
+        } else {
+            return .result() {
+                Text("No active recording")
+            }
+        }
+    }
+}
+
+@MainActor
+struct StartRecordingIntent: AppIntent {
+    static let title: LocalizedStringResource = "Start Recording"
+    static var parameterSummary: some ParameterSummary {
+        Summary("Start a new recording in \(.applicationName)")
+    }
+    
+    @Dependency var audioRecorder: AudioRecordingService
+    
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let token = try await audioRecorder.start()
+        
+        // Create Live Activity HERE, not in recorder
+        let activity = try Activity<RecordingActivityAttributes>.request(
+            attributes: RecordingActivityAttributes(sessionId: token.id),
+            contentState: RecordingActivityAttributes.ContentState(
+                startTime: Date(),
+                isPaused: false,
+                rms: []
+            )
+        )
+        
+        return .result(value: activity.id)
+    }
+}
+
+// Register shortcuts for discovery
+struct DonnaShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: StartRecordingIntent(),
+            phrases: [
+                "Start recording in \(.applicationName)",
+                "\(.applicationName) start recording"
+            ],
+            shortTitle: "Start Recording",
+            systemImageName: "mic.circle"
+        )
+        
+        // Parameter-less for hardware
+        AppShortcut(
+            intent: StopCurrentRecordingIntent(),
+            phrases: [
+                "Stop recording in \(.applicationName)",
+                "\(.applicationName) stop recording"
+            ],
+            shortTitle: "Stop Recording",
+            systemImageName: "stop.circle"
+        )
+    }
+}
+```
+
+### 7. Hardware Event Handling
+
+> **Platform Engineer**: “No nonisolated entry points; all work through actor”
+
+```swift
+enum HardwareEvent: Sendable {
+    case volumeButton(isUp: Bool, phase: ButtonPhase)
+    case remotePlayPause
+    case carPlayVoiceButton
+}
+
+enum ButtonPhase: Sendable {
+    case began
+    case ended
+    case cancelled
+}
+
+actor HardwareEventRouter {
+    let recorder: AudioRecorderManager  // Inject concrete actor
+    
+    func handle(event: HardwareEvent) async {
+        switch event {
+        case .volumeButton(_, let phase) where phase == .ended:
+            await toggleRecording()
+        case .remotePlayPause:
+            await toggleRecording()
+        case .carPlayVoiceButton:
+            await toggleRecording()
+        default:
+            break
+        }
+    }
+    
+    private func toggleRecording() async {
+        if await recorder.currentSession != nil {
+            _ = try? await recorder.stopCurrent()
+        } else {
+            _ = try? await recorder.start()
+        }
+    }
+}
+
+// Setup in app launch
+func setupHardwareEventHandling() {
+    let router = HardwareEventRouter(recorder: audioRecorderManager)
+    
+    // MPRemoteCommandCenter - works for AirPods, CarPlay, etc
+    let commandCenter = MPRemoteCommandCenter.shared()
+    commandCenter.playCommand.addTarget { _ in
+        Task { await router.handle(event: .remotePlayPause) }
+        return .success
+    }
+    
+    // Platform Engineer: "Action Button triggers assigned shortcut automatically"
+}
+```
+
+### 8. Live Activity Updates - Working Within Limits
+
+> **Platform Engineer**: “NSSupportsLiveActivitiesFrequentUpdates doubles budget to 8/15min”
+
+```swift
+struct RecordingActivityAttributes: ActivityAttributes {
+    public struct ContentState: Codable, Hashable {
+        public var startTime: Date
+        public var isPaused: Bool
+        public var rms: [UInt8] // Max 32 samples
+    }
+    
+    let sessionId: UUID
+}
+
+// In Live Activity widget
+struct RecordingLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
+            // Timer costs ZERO pushes!
+            HStack {
+                Image(systemName: "mic.fill")
+                    .foregroundColor(.red)
+                Text(timerInterval: context.state.startTime...Date.distantFuture)
+                    .font(.title2.monospacedDigit())
+                WaveformView(samples: context.state.rms)
+            }
+            .padding()
+        }
+    }
+}
+
+// Waveform updates in recorder
+private func updateLiveActivity() async {
+    // Batch 32 samples = 8 seconds of waveform
+    guard samples.count >= 32 else { return }
+    
+    let content = RecordingActivityAttributes.ContentState(
+        startTime: session.startTime,
+        isPaused: session.isPaused,
+        rms: Array(samples.prefix(32))
+    )
+    
+    // With frequent updates: 8 pushes per 15 min available
+    await activity.update(using: content)
+    samples.removeFirst(32)
+}
+```
+
+### 9. Crash Recovery Implementation
+
+> **Platform Engineer**: “Make recovery synchronous with DispatchSemaphore”
+
+```swift
+// In AppDelegate
+func application(_ application: UIApplication, 
+                didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+    
+    // Block synchronously for crash recovery
+    let semaphore = DispatchSemaphore(value: 0)
+    Task {
+        await RecordingRecoveryManager.shared.checkForOrphanedRecordings()
+        semaphore.signal()
+    }
+    
+    // Platform Engineer: "200ms blocking is acceptable"
+    semaphore.wait()
+    
+    // Only after recovery is complete
+    AppDependencyManager.bootstrap()
+    
+    return true
+}
+
+actor RecordingRecoveryManager {
+    struct RecordingMarker: Codable {
+        let id: UUID
+        let startTime: Date
+        var state: RecordingState
+        let activityId: String?
+        let expectedLocation: URL
+        
+        enum RecordingState: String, Codable {
+            case inProgress
+            case finalizing
+            case complete
+        }
+    }
+    
+    func checkForOrphanedRecordings() async {
+        let markerDirectory = FileManager.default.urls(for: .libraryDirectory, 
+                                                       in: .userDomainMask)[0]
+            .appendingPathComponent("RecordingMarkers")
+        
+        guard let markers = try? FileManager.default.contentsOfDirectory(
+            at: markerDirectory,
+            includingPropertiesForKeys: nil
+        ) else { return }
+        
+        for markerURL in markers where markerURL.pathExtension == "marker" {
+            await processMarker(at: markerURL)
+        }
+    }
+    
+    private func processMarker(at markerURL: URL) async {
+        guard let data = try? Data(contentsOf: markerURL),
+              let marker = try? JSONDecoder().decode(RecordingMarker.self, from: data),
+              marker.state != .complete else { return }
+        
+        // Check if Live Activity exists
+        let activities = Activity<RecordingActivityAttributes>.activities
+        let hasLiveActivity = activities.contains { $0.attributes.sessionId == marker.id }
+        
+        if !hasLiveActivity && marker.state == .inProgress {
+            // App crashed during recording
+            await recoverOrphanedRecording(marker, markerURL: markerURL)
+        }
+    }
+    
+    private func recoverOrphanedRecording(_ marker: RecordingMarker, markerURL: URL) async {
+        let tempM4A = tempDirectory.appendingPathComponent("\(marker.id).m4a.tmp")
+        
+        // Check if we have a valid M4A file
+        guard FileManager.default.fileExists(atPath: tempM4A.path),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: tempM4A.path),
+              let fileSize = attributes[.size] as? Int,
+              fileSize > 1024 else {  // Minimum valid M4A size
+            // No valid audio - clean up
+            try? FileManager.default.removeItem(at: markerURL)
+            try? FileManager.default.removeItem(at: tempM4A)
+            return
+        }
+        
+        // Complete the two-phase commit
+        do {
+            try FileManager.default.moveItem(at: tempM4A, to: marker.expectedLocation)
+            
+            // Update marker
+            var updatedMarker = marker
+            updatedMarker.state = .complete
+            let data = try JSONEncoder().encode(updatedMarker)
+            try data.write(to: markerURL, options: .atomic)
+        } catch {
+            // Failed to recover - clean up
+            try? FileManager.default.removeItem(at: markerURL)
+            try? FileManager.default.removeItem(at: tempM4A)
+        }
+    }
+}
+```
+
+### 10. Speech Transcription Integration
+
+> **Platform Engineer**: “SpeechAnalyzer .lowLatency adds 15MB RAM - foreground only”
+
+```swift
+private func setupTranscription() async throws {
+    // Get speech-optimized format
+    let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+    
+    // Platform Engineer: "Use .lowLatency only in foreground"
+    let options: SpeechAnalyzer.Options = UIApplication.shared.applicationState == .active 
+        ? [.lowLatency] : []
+    
+    session.analyzer = try await SpeechAnalyzer(
+        audioFormat: format,
+        options: options
+    )
+}
+
+// Rotation strategy
+private func checkAnalyzerRotation(session: RecordingSession) async {
+    let timeSinceStart = Date().timeIntervalSince(session.startTime)
+    let dropRate = Double(session.droppedFrames) / Double(session.totalFrames)
+    
+    // Platform Engineer: "Rotate on 15min OR 0.1% drops"
+    if timeSinceStart > 900 || dropRate > 0.001 {
+        try? await session.analyzer.finishProcessing()
+        session.analyzer = try await SpeechAnalyzer(audioFormat: format)
+        session.droppedFrames = 0
+        session.totalFrames = 0
+    }
+}
+```
+
+## iOS 26 Platform Updates
+
+### Memory Budget by Hardware
+
+> **Platform Engineer**: “Jetsam limits tightened on legacy chips”
+
+|Chip               |Good-path RSS|Jetsam Limit|Live Activity|
+|-------------------|-------------|------------|-------------|
+|A12 (iPhone XS)    |24 MB        |28 MB       |6 MB         |
+|A14 (iPhone 12)    |32 MB        |40 MB       |8 MB         |
+|A17 (iPhone 15 Pro)|45 MB        |50 MB       |10 MB        |
+
+### Performance Optimizations
+
+1. **Direct AAC Streaming**: 35% latency reduction (620ms → 400ms for 90s recording)
+2. **Buffer Size Tuning**: 512 frames on A14+ saves 5-7ms stop latency
+3. **Variable Bitrate**: 15% smaller files with `AVAudioBitRateStrategy_VariableConstrained`
+4. **Live Activity Memory**: Call `invalidate(preservingState:)` to halve widget RAM
+
+### Testing Requirements
+
+**Minimum Test Matrix**:
+
+- iPhone XS (A12) - lowest memory budget
+- iPhone 15 Pro (A17) - validate optimizations
+- Memory pressure: `xcrun simctl spawn booted memory_pressure --simulate-critical 60`
+
+## Error Handling Philosophy
+
+**Principle**: Throw for exceptional conditions, return values for domain results.
+
+```swift
+// Good: Clear separation
+func start() async throws -> SessionToken  // Throws if can't start
+func stop(_ token: SessionToken) async throws -> CompletedRecording  // Throws if invalid token
+
+// Bad: Mixing concerns
+enum RecordingResult {
+    case started(SessionToken)
+    case failed(Error)  // Don't do this!
+}
+```
+
+**Transcription Failure Strategy**: Recording continues even if transcription fails
+
+- Separate error tracking for transcription
+- UI shows “Recording ✓, Transcription ✗”
+- Users don’t lose audio due to model issues
+
+## Implementation Checklist
+
+Based on platform constraints and best practices:
+
+### Immediate (Build fixes)
+
+- [ ] Fix AVAudioPCMBuffer Sendability with toData() conversion
+- [ ] Update currentSession to use nonisolated getter pattern
+- [ ] Replace os_proc_available_memory() with task_vm_info helper
+- [ ] Add @MainActor to all ShowsSnippetView intents
+- [ ] Update all Info.plist keys from platform engineer’s list
+- [ ] Set StrictConcurrency = complete in build settings
+
+### Before Testing
+
+- [ ] Implement AsyncChannel in FileCoordinator
+- [ ] Fix crash recovery with DispatchSemaphore
+- [ ] Update hardware event router to remove nonisolated
+- [ ] Implement direct AAC streaming with makeStreamingAACFile
+- [ ] Add route change handling for audio session
+
+### Performance Optimization
+
+- [ ] Set NSSupportsLiveActivitiesFrequentUpdates for 8 push budget
+- [ ] Add memory monitoring with footprint thresholds
+- [ ] Tune buffer sizes: 512 on A14+, 1024 on A12
+- [ ] Enable variable bitrate AAC encoding
+
+### App Store Preparation
+
+- [ ] Verify privacy strings mention “locally on-device”
+- [ ] Test on A12 and A17 devices minimum
+- [ ] Profile memory: RSS < 45MB (A17), < 24MB (A12)
+- [ ] Ensure no network activity during recording
+
+## Conclusion
+
+This architecture emerged from navigating real iOS platform constraints, now validated and enhanced by platform engineering review:
+
+- **8 push/15min Live Activity** with NSSupportsLiveActivitiesFrequentUpdates
+- **Direct AAC streaming** eliminates export latency (35% improvement)
+- **Public memory APIs** replace private symbols for App Store compliance
+- **AsyncChannel** prevents unbounded task spawning
+- **Strict concurrency** compliance with proper Sendable patterns
+
+Each decision represents hours of debugging, platform knowledge, and expert validation. By implementing these patterns, you’ll build a robust, production-ready app that truly serves ADHD users’ needs while passing App Store review and performing optimally across all supported devices.
+
+> **Platform Engineer’s Verdict**: “Carry these patches and your codebase will compile clean under Strict Concurrency, sail through App Store review, and avoid both Jetsam and Live Activity throttling on the broadest hardware set.”
+
+Remember: The simplicity of iOS 26-exclusive features (SpeechAnalyzer, direct AAC) more than compensates for losing older iOS versions. Ship it!
+
+## Appendix: Legacy Patterns (Pre-iOS 26)
+
+For historical reference, these patterns were necessary before iOS 26:
+
+### CAF to M4A Export (Deprecated)
+
+```swift
+// No longer needed - use direct AAC streaming instead
+let exportSession = AVAssetExportSession(asset: asset, 
+                                       presetName: AVAssetExportPresetAppleM4A)
+```
+
+### Manual Format Conversion (Deprecated)
+
+```swift
+// AVAudioFile now handles this internally with direct AAC
+```
+
+These legacy patterns added complexity and latency. iOS 26’s direct AAC streaming is both simpler and faster.
+</document_content>
+</document>
+<document index="2">
+<source>./CLAUDE.md</source>
+<document_content>
+# CLAUDE.md - AI Agent Field Guide for Donna iOS
+
+> Donna iOS 26 – voice-first ADHD recording app
+> Reference architecture: `ARCHITECTURE.md` (Donna iOS 26 Architecture Guide)
+> This guide enables autonomous development by AI agents
+
+---
+
+## 0. Mission & Context
+
+You are working on Donna, a voice-first recording app for users with ADHD. The app leverages iOS 26's SpeechAnalyzer, App Intents, and Live Activities to provide instant, frictionless audio capture.
+
+**Your objectives:**
+
+- Implement, extend, and maintain a Swift-concurrency-strict iOS 26 application
+- Keep all tests green and respect architectural invariants
+- Use ONLY the Makefile commands provided - never shell out ad-hoc
+- If a Make target is missing, add it to the Makefile first
+
+**Key architectural decisions:**
+
+- iOS 26 minimum (no backwards compatibility)
+- Direct AAC streaming (35% latency improvement)
+- Strict concurrency compliance
+- Voice-first interaction (Siri, Action Button, hardware triggers)
+
+---
+
+## 1. Repository Layout & Naming Conventions
+
+### Directory Structure
+
+```
+Donna/
+├── Donna.xcworkspace      # Xcode workspace (always use this)
+├── DonnaApp/              # SwiftUI host app (iOS 26+)
+│   ├── DonnaApp.xcodeproj # DO NOT EDIT .pbxproj directly
+│   └── Info.plist         # Edit via Xcode only
+├── DonnaCore/             # Audio + transcription actors
+├── DonnaKit/              # SPM package: protocols + App Intents
+├── DonnaWidgets/          # Live Activity widgets
+├── Tests/                 # All test targets
+│   ├── Unit/              # Pure Swift tests
+│   ├── Integration/       # Actor + concurrency tests
+│   └── UITests/           # End-to-end automation
+├── Makefile               # Canonical build commands
+├── CLAUDE.md              # You are reading this
+├── ios-4.md               # Architecture reference (read-only)
+└── .ci/                   # CI scripts (mirror Makefile)
+```
+
+### Naming Conventions
+
+**UpperCamelCase** for:
+
+- Targets and frameworks: `DonnaApp`, `DonnaCore`, `DonnaKit`, `DonnaWidgets`
+- Swift packages and modules
+- Xcode groups and top-level folders
+- Any type or module-level concept
+
+**lowerCamelCase or kebab-case** for:
+
+- Helper scripts: `run-tests.sh`
+- Resource directories: `resources/`
+- Non-Swift files and utilities
+
+### Bundle ID Strategy
+
+Root: `com.williamwagner` (lowercase, reverse-DNS) Pattern: `<root>.<product>.<qualifier>`
+
+|Target|Bundle ID|
+|---|---|
+|Main App|`com.williamwagner.Donna`|
+|DonnaKit|`com.williamwagner.Donna.DonnaKit`|
+|DonnaCore|`com.williamwagner.Donna.DonnaCore`|
+|DonnaWidgets|`com.williamwagner.Donna.DonnaWidgets`|
+|Tests|`com.williamwagner.Donna.Tests`|
+|UITests|`com.williamwagner.Donna.UITests`|
+
+**AIDEV-NOTE**: Bundle IDs are case-sensitive. Keep root lowercase, product TitleCase.
+
+---
+
+## 2. Critical Ground Rules
+
+### Concurrency
+
+- **Always** maintain `StrictConcurrency = complete`
+- Treat all concurrency warnings as errors
+- AVAudioPCMBuffer → Data conversion before actor hops
+- Use proper Sendable patterns (see Section 7)
+
+### Platform
+
+- iOS 26.0 minimum - no `#available` checks
+- Use direct AAC streaming via `AVAudioFile`
+- No private APIs (`os_proc_available_memory` is banned)
+
+### Code Style
+
+- Commits: `<area>: <imperative> (fix #ticket)`
+- Example: `audio: fix sendability in tap callback (fix #127)`
+- Tag AI-assisted commits: `[AI]` for >50%, `[AI-minor]` for <50%
+- PR must pass: build, lint, test, ui-test, smoke-shortcut
+
+### Testing Philosophy
+
+- Every behavior must have a test
+- Integration tests use fakes, not mocks
+- UI tests must be idempotent
+- No test should depend on external state
+- **NEVER let AI write or modify tests**
+
+---
+
+## 3. Anchor Comments
+
+Add specially formatted comments throughout the codebase as breadcrumbs for AI navigation and context preservation.
+
+### Guidelines
+
+- Use `AIDEV-NOTE:`, `AIDEV-TODO:`, or `AIDEV-QUESTION:` prefixes
+- Keep them concise (≤ 120 chars)
+- **Always search for existing anchors** before modifying code: `grep -r "AIDEV-" .`
+- **Update anchors** when modifying associated code
+- **Never remove `AIDEV-NOTE`s** without explicit human instruction
+
+### When to Add Anchors
+
+Add anchor comments when code is:
+
+- Too long or complex
+- Performance-critical
+- Has non-obvious business logic
+- Could be confusing to future developers/AI
+- Has known issues unrelated to current task
+
+### Examples
+
+```swift
+// AIDEV-NOTE: perf-critical - handles 100k events/sec, no allocations allowed
+func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+    // AIDEV-QUESTION: Why convert to Data here instead of in tap?
+    // A: Sendability requirement - buffer isn't Sendable
+    let data = buffer.toData()
+    
+    // AIDEV-TODO: Add buffer pooling to reduce allocations (PERF-234)
+    Task { await fileCoordinator.write(data) }
+}
+
+// AIDEV-NOTE: Never modify - encodes $10k/month business logic
+func calculateSubscriptionTier(usage: Usage) -> Tier {
+    // Complex tier calculation verified by finance team
+}
+```
+
+---
+
+## 4. Build & Test Commands
+
+### Daily Development Workflow
+
+```bash
+# Check concurrency compliance
+make concurrency-check
+
+# Run linter and formatter
+make lint
+
+# Run all unit + integration tests
+make test
+
+# Run UI automation suite
+make ui-test
+
+# Quick smoke test (does recording land on disk?)
+make smoke-shortcut
+
+# Clean build artifacts
+make clean
+```
+
+### Interactive Development
+
+```bash
+# Install and run app with live logs
+make run
+
+# Trigger Siri in simulator
+xcrun simctl siri booted "Start recording in Donna"
+
+# Simulate memory pressure
+xcrun simctl spawn booted memory_pressure --simulate-critical 60
+```
+
+### Git Workflow for AI Development
+
+```bash
+# Create isolated workspace for experiments
+git worktree add ../donna-ai-experiments/feature-x -b ai/feature-x
+
+# Work in isolated environment
+cd ../donna-ai-experiments/feature-x
+# Let AI experiment freely here
+
+# Cherry-pick successful changes back
+cd ../../donna
+git cherry-pick <commit-sha>
+
+# Clean up when done
+git worktree remove ../donna-ai-experiments/feature-x
+```
+
+---
+
+## 5. Architecture Quick Reference
+
+### Key Components
+
+1. **AudioRecorderManager** (actor)
+
+    - Manages AVAudioEngine with dual taps
+    - Converts PCM buffers to Data for Sendability
+    - Handles interruptions and hardware events
+    - AIDEV-NOTE: Critical actor - all audio flows through here
+2. **FileCoordinator** (actor)
+
+    - Isolates all file I/O from audio thread
+    - Uses AsyncChannel to prevent unbounded tasks
+    - Implements two-phase commit for crash safety
+    - AIDEV-NOTE: Never do file I/O outside this actor
+3. **App Intents**
+
+    - StartRecordingIntent (creates Live Activity)
+    - StopCurrentRecordingIntent (parameter-less for hardware)
+    - All view-returning intents need @MainActor
+    - AIDEV-NOTE: Intents run in separate process - keep lightweight
+4. **Live Activities**
+
+    - 8 updates per 15 min (with NSSupportsLiveActivitiesFrequentUpdates)
+    - 32 RMS samples max (memory constraint)
+    - Timer uses .timer() - costs zero pushes
+    - AIDEV-NOTE: ContentState must be <4KB compressed
+
+### Memory Budgets
+
+|Device|RSS Target|Jetsam Limit|
+|---|---|---|
+|A12 (iPhone XS)|24 MB|28 MB|
+|A14 (iPhone 12)|32 MB|40 MB|
+|A17 (iPhone 15 Pro)|45 MB|50 MB|
+
+---
+
+## 6. Test Architecture
+
+### Test Pyramid
+
+```
+┌────────────────────────────────────┐
+│  End-to-end UI/Shortcut (10-15)   │  make ui-test
+└────────────────────────────────────┘
+┌────────────────────────────────────┐
+│  Integration Tests (50-100)        │  make test
+└────────────────────────────────────┘
+┌────────────────────────────────────┐
+│  Unit Tests (500+)                 │  make test
+└────────────────────────────────────┘
+```
+
+> **See Tests/CLAUDE.md** for detailed testing guidance, framework choices, and patterns
+
+### Writing Tests (HUMANS ONLY)
+
+> **CRITICAL**: AI must NEVER write or modify test files. Tests encode human understanding and business logic that AI cannot fully grasp.
+
+#### Unit Test Example
+
+```swift
+// AIDEV-NOTE: Sacred ground - tests encode business requirements
+import XCTest
+@testable import DonnaCore
+
+final class MarkerFileTests: XCTestCase {
+    func testTwoPhaseCommitTransitions() throws {
+        // This test encodes our crash-safety requirements
+        var marker = RecordingMarker(
+            id: UUID(),
+            startTime: .now,
+            state: .inProgress,
+            activityId: nil,
+            expectedLocation: URL(fileURLWithPath: "/tmp/test.m4a")
+        )
+        
+        // Transition through states
+        marker.state = .finalizing
+        marker.state = .complete
+        
+        XCTAssertEqual(marker.state, .complete)
+    }
+}
+```
+
+---
+
+## 7. Common Implementation Patterns
+
+### Sendability Pattern for Audio
+
+```swift
+// AIDEV-NOTE: Always convert AVAudioPCMBuffer to Data immediately
+inputNode.installTap(...) { [weak self] buffer, time in
+    // Convert in tap callback (render thread)
+    let data = buffer.toData()
+    
+    // Now safe to cross actor boundary
+    Task {
+        await self?.processBuffer(data, time: time)
+    }
+}
+```
+
+### Actor Property Exposure
+
+```swift
+// AIDEV-NOTE: Pattern for protocol conformance with actors
+actor AudioRecorderManager: AudioRecordingService {
+    private var _currentSession: RecordingSession?
+    
+    // Correct pattern for protocol conformance
+    nonisolated var currentSession: RecordingSession? {
+        actorIsolated { _currentSession }
+    }
+    
+    private func actorIsolated<T>(_ body: () -> T) -> T { body() }
+}
+```
+
+### Memory Monitoring
+
+```swift
+// AIDEV-NOTE: Check memory before large operations
+func checkMemoryPressure() async {
+    if let footprint = currentFootprint(), 
+       footprint.availMemory < 8_000_000 {
+        // Flush buffers immediately
+        await fileCoordinator.flushAllBuffers()
+    }
+}
+```
+
+### Direct AAC File Creation
+
+```swift
+// AIDEV-NOTE: iOS 26+ only - 35% faster than CAF export
+func makeStreamingAACFile(url: URL) throws -> AVAudioFile {
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatMPEG4AAC,
+        AVSampleRateKey: 44_100,
+        AVNumberOfChannelsKey: 1,
+        AVEncoderBitRateKey: 128_000,
+        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+    ]
+    
+    return try AVAudioFile(forWriting: url,
+                          settings: settings,
+                          commonFormat: .pcmFormatFloat32,
+                          interleaved: false)
+}
+```
+
+---
+
+## 8. Architectural Invariants (DO NOT VIOLATE)
+
+1. **File Writing**: Direct AAC to `.m4a.tmp`, then atomic rename
+2. **FileCoordinator**: Owns ALL AVAudioFile operations
+3. **Live Activities**: Maximum 8 pushes per 15 minutes
+4. **Crash Recovery**: Blocks app launch ≤ 200ms
+5. **Memory**: Stay under device-specific Jetsam limits
+6. **Concurrency**: All cross-actor data must be Sendable
+
+---
+
+## 9. Files and Patterns to NEVER Modify
+
+### Sacred Files (NO AI MODIFICATIONS)
+
+#### Test Files
+
+```swift
+// Tests/**/*.swift - NEVER TOUCH
+// Tests encode human understanding of requirements
+// AI cannot understand business context deeply enough
+```
+
+#### Xcode Project Files
+
+```
+// *.xcodeproj/project.pbxproj - NEVER EDIT DIRECTLY
+// Use Xcode GUI or xcodebuild commands only
+// Manual edits break project file integrity
+```
+
+#### Database Migrations
+
+```swift
+// Migrations/*.sql - NEVER MODIFY AFTER COMMIT
+// Migrations are immutable once deployed
+// Mistakes = data loss = career impact
+```
+
+#### Security-Critical Code
+
+```swift
+// Auth/**/*.swift - HUMAN REVIEW REQUIRED
+// Keychain/**/*.swift - SECURITY TEAM ONLY
+// Crypto/**/*.swift - NO AI SUGGESTIONS
+```
+
+#### API Contracts
+
+```swift
+// OpenAPI.yaml - REQUIRES VERSION BUMP
+// Breaking changes need 3-month deprecation
+// Mobile apps can't force-update instantly
+```
+
+#### Configuration Files
+
+```
+// Info.plist - Edit via Xcode only
+// *.entitlements - Capability changes need review
+// Secrets/*.swift - Obviously never touch
+```
+
+### Anti-Patterns to Avoid
+
+```swift
+// ❌ NEVER: Let AI "fix" failing tests
+test.expectedValue = actualValue  // This hides bugs!
+
+// ❌ NEVER: Bypass type safety
+as! SomeType  // Without explicit approval
+try! someCall()  // Crashes in production
+
+// ❌ NEVER: Add network calls in audio path
+// Audio thread has ~23ms budget at 44.1kHz
+
+// ❌ NEVER: Store state outside designated actors
+var globalCache = [String: Data]()  // Race condition!
+```
+
+---
+
+## 10. Adding New Features
+
+### Before Writing Code
+
+1. Read the architecture document (`ios-4.md`)
+2. Search for relevant AIDEVcomments: `grep -r "AIDEV-" DonnaCore/`
+3. Check if similar patterns exist in codebase
+4. Write tests first (TDD) - HUMAN ONLY
+5. Ensure Makefile has necessary targets
+
+### Implementation Checklist
+
+- [ ] Add AIDEV-NOTE comments for complex logic
+- [ ] Feature builds with `make concurrency-check`
+- [ ] Unit tests pass (human-written)
+- [ ] Integration tests cover actor interactions
+- [ ] UI test validates user-visible behavior
+- [ ] Memory usage profiled on A12 device
+- [ ] No new concurrency warnings
+- [ ] Update relevant AIDEVcomments
+
+### Adding Make Targets
+
+If you need a new build/test command:
+
+```make
+# Add to Makefile with clear documentation
+## description of what this does
+new-target:
+	command with proper error handling
+```
+
+---
+
+## 11. Debugging Common Issues
+
+### Sendability Errors
+
+```
+Error: Passing argument of non-Sendable type 'AVAudioPCMBuffer'
+```
+
+**Fix**: Convert to Data in the tap before Task boundary **Look for**: AIDEV-NOTE comments about Sendability
+
+### Actor Isolation
+
+```
+Error: Actor-isolated property 'currentSession' can not be referenced
+```
+
+**Fix**: Use nonisolated computed property pattern **Look for**: AIDEV-NOTE: Pattern for protocol conformance
+
+### Memory Warnings
+
+```
+Received memory pressure notification
+```
+
+**Fix**: Check footprint with currentFootprint(), flush buffers **Look for**: AIDEV-NOTE: perf-critical sections
+
+### Live Activity Throttling
+
+```
+Activity update failed: TooManyUpdates
+```
+
+**Fix**: Batch updates, respect 8/15min limit **Look for**: AIDEV-NOTE: ContentState constraints
+
+---
+
+## 12. Emergency Procedures
+
+### Build Broken?
+
+1. `make clean`
+2. `git checkout main && git pull`
+3. `make bootstrap`
+4. `make concurrency-check`
+5. Search for recent AIDEV-TODO comments that might indicate WIP
+
+### Tests Flaky?
+
+1. Check for hardcoded delays - replace with proper waits
+2. Ensure tests use `-UITest_` launch arguments
+3. Clean simulator state: `xcrun simctl erase booted`
+4. NEVER modify tests to make them pass - fix the code instead
+
+### Performance Regression?
+
+1. Profile with Instruments (memory + time profiler)
+2. Check buffer sizes (512 vs 1024)
+3. Verify direct AAC streaming is enabled
+4. Look for AIDEV-NOTE: perf comments
+
+---
+
+## 13. Git Commit Standards
+
+### Commit Message Format
+
+```
+<type>: <description> [AI-tag]
+
+<body explaining what and why>
+
+AI assistance: <what AI did vs what you did>
+```
+
+### AI Tags
+
+- `[AI]` - Significant AI assistance (>50% generated)
+- `[AI-minor]` - Minor AI assistance (<50% generated)
+- `[AI-review]` - AI used for code review only
+
+### Example
+
+```
+feat: implement memory pressure monitoring [AI]
+
+Add currentFootprint() using public task_vm_info API to monitor
+memory usage and trigger buffer flushes when approaching limits.
+
+AI assistance: Generated task_vm_info boilerplate and struct definitions.
+Human: Designed threshold strategy and integration points.
+```
+
+---
+
+## 14. Communication
+
+- Architecture questions → Create issue with `[Architecture]` prefix
+- Build failures → Check CI logs first, then create issue
+- New patterns → Propose in PR with tests demonstrating usage
+- AIDEVcomments → Use for inline questions/notes
+
+**Remember**:
+
+- The Makefile is the single source of truth for commands
+- The architecture document is read-only reference
+- All code must pass strict concurrency checks
+- Tests are sacred - humans only
+- When in doubt, add an AIDEV-QUESTION comment
+
+---
+
+## Quick Start for New Task
+
+```bash
+# 1. Update your local copy
+git checkout main && git pull
+
+# 2. Search for relevant context
+grep -r "AIDEV-" . | grep -i "your-feature-area"
+
+# 3. Create feature branch (or use worktree for experiments)
+git checkout -b feature/your-feature
+# OR for experimental work:
+git worktree add ../donna-experiments/your-feature -b ai/your-feature
+
+# 4. Verify clean state
+make clean && make concurrency-check
+
+# 5. Make changes with TDD
+# - Human writes failing test
+# - Implement feature (AI can help here)
+# - Make test pass
+# - Add AIDEV- comments for complex parts
+
+# 6. Validate everything
+make lint && make test && make ui-test
+
+# 7. Commit with proper AI attribution
+git commit -m "feat: your feature [AI-minor]"
+
+# 8. Create PR with green CI
+```
+
+Happy coding! Remember: when in doubt, check the architecture document, search for AIDEVcomments, and follow existing patterns.
+</document_content>
+</document>
+<document index="3">
+<source>./Makefile</source>
+<document_content>
+# -------- Repo‑wide variables --------
+SCHEME        ?= DonnaApp
+WORKSPACE     ?= Donna.xcworkspace
+DEST          ?= platform=iOS Simulator,OS=26.0,name=iPhone 15 Pro
+BUILD_DIR     ?= .build
+LOG_FILTER    ?= $(shell which xcbeautify > /dev/null && echo "xcbeautify" || echo "cat")
+
+
+# -------- Project Generation --------
+## generate Xcode project from project.yml
+generate:
+	xcodegen --spec project.yml --use-cache
+
+## bootstrap including XcodeGen
+bootstrap:
+	@brew bundle --file=./Brewfile
+	@brew install xcodegen  # Add this
+	@$(MAKE) generate
+
+# Update the concurrency-check to ensure project is generated first
+concurrency-check: generate
+	xcodebuild build -workspace $(WORKSPACE) -scheme $(SCHEME) \
+		# ... rest of command
+
+# Add a pure SwiftPM build option
+## build all SwiftPM targets directly
+package-build:
+	swift build --configuration release \
+		-Xswiftc -strict-concurrency=complete \
+		--cache-builds
+
+# -------- Static analysis & lint --------
+## run swift-format + swiftlint
+lint:
+	swift-format -i `git ls-files '*.swift'`
+	swiftlint | $(LOG_FILTER)
+
+## build with strict concurrency + actor data‑race checks
+concurrency-check:
+	xcodebuild build -workspace $(WORKSPACE) -scheme $(SCHEME) \
+		-destination '$(DEST)' \
+		-derivedDataPath $(BUILD_DIR) \
+		-configuration Debug \
+		ENABLE_ACTOR_DATA_RACE_CHECKS=YES \
+		OTHER_SWIFT_FLAGS='-strict-concurrency=complete' \
+		| $(LOG_FILTER)
+
+# -------- Test targets --------
+## unit + logic tests
+test:
+	xcodebuild test -workspace $(WORKSPACE) -scheme $(SCHEME) \
+		-destination '$(DEST)' \
+		-derivedDataPath $(BUILD_DIR) \
+		-parallel-testing-enabled YES \
+		| $(LOG_FILTER)
+
+## UI automation pass – launches Donna, runs Siri shortcut,
+## verifies Live Activity pin, tears down.
+ui-test:
+	xcodebuild test-without-building \
+		-workspace $(WORKSPACE) -scheme DonnaUITests \
+		-destination '$(DEST)' \
+		-test-iterations 1 \
+		| $(LOG_FILTER)
+
+# -------- Run the app in a booted sim and stream logs --------
+run:
+	xcrun simctl bootstatus --watch '$(DEST)'
+	xcrun simctl install booted "$(BUILD_DIR)/Build/Products/Debug-iphonesimulator/DonnaApp.app"
+	xcrun simctl launch --console booted com.example.DonnaApp
+
+# -------- CLI hooks for JIN agents --------
+## invoke a parameter‑less Start Recording shortcut inside the sim,
+## wait 10 s, then Stop; exit 0 if Donna returns a completed recording.
+smoke-shortcut:
+	@out=$$(xcrun simctl shortcuts booted run "Start Recording in Donna" || true); \
+	sleep 10; \
+	xcrun simctl shortcuts booted run "Stop Recording in Donna" || true; \
+	if [ -f "$${HOME}/Library/Developer/CoreSimulator/Devices/$$(xcrun simctl list devices | grep -m1 Booted | awk '{print $$NF}' | tr -d '()')/data/Containers/Data/Application/*/Documents/Recordings/*.m4a" ]; then \
+	  echo "✅ shortcut smoke‑test passed"; \
+	else \
+	  echo "❌ smoke‑test failed: no recording found"; exit 1; \
+	fi
+
+clean:
+	rm -rf $(BUILD_DIR)
+```
+</document_content>
+</document>
+<document index="4">
+<source>./Package.swift</source>
+<document_content>
+// swift-tools-version: 6.2
+import PackageDescription
+
+let package = Package(
+  name: "Donna",
+  platforms: [.iOS(.v26)],
+  products: [
+    .library(name: "DonnaShared",  targets: ["DonnaShared"]),
+    .library(name: "DonnaCore",    targets: ["DonnaCore"]),
+    .library(name: "DonnaIntents", targets: ["DonnaIntents"]),
+  ],
+  targets: [
+    // 1. Pure protocols + value types
+    .target(name: "DonnaShared",
+            path: "Modules/DonnaShared/Sources"),
+
+    // 2. Heavy implementation – links AVFAudio, Speech, Combine
+    .target(name: "DonnaCore",
+            dependencies: ["DonnaShared"],
+            path: "Modules/DonnaCore/Sources",
+            swiftSettings: [.unsafeFlags(["-strict-concurrency=complete"])]),
+
+    // 3. App Intents, Shortcut metadata, lightweight SwiftUI snippet views
+    .target(name: "DonnaIntents",
+            dependencies: ["DonnaShared"],
+            path: "Modules/DonnaIntents/Sources",
+            resources: [.process("Resources")]),
+
+    .testTarget(name: "DonnaTests",
+                dependencies: ["DonnaCore","DonnaShared"]),
+  ]
+)
+</document_content>
+</document>
+<document index="5">
+<source>./Tests/Unit/DonnaTests.swift</source>
+<document_content>
+//
+//  DonnaTests.swift
+//  DonnaTests
+//
+//  Created by William Wagner on 6/14/25.
+//
+
+import Testing
+@testable import Donna
+
+struct DonnaTests {
+
+    @Test func example() async throws {
+        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+    }
+
+}
+
+</document_content>
+</document>
+<document index="6">
+<source>./Tests/UITests/DonnaUITests.swift</source>
+<document_content>
+//
+//  DonnaUITests.swift
+//  DonnaUITests
+//
+//  Created by William Wagner on 6/14/25.
+//
+
+import XCTest
+
+final class DonnaUITests: XCTestCase {
+
+    override func setUpWithError() throws {
+        // Put setup code here. This method is called before the invocation of each test method in the class.
+
+        // In UI tests it is usually best to stop immediately when a failure occurs.
+        continueAfterFailure = false
+
+        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+    }
+
+    override func tearDownWithError() throws {
+        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    }
+
+    @MainActor
+    func testExample() throws {
+        // UI tests must launch the application that they test.
+        let app = XCUIApplication()
+        app.launch()
+
+        // Use XCTAssert and related functions to verify your tests produce the correct results.
+    }
+
+    @MainActor
+    func testLaunchPerformance() throws {
+        // This measures how long it takes to launch your application.
+        measure(metrics: [XCTApplicationLaunchMetric()]) {
+            XCUIApplication().launch()
+        }
+    }
+}
+
+</document_content>
+</document>
+<document index="7">
+<source>./Tests/UITests/DonnaUITestsLaunchTests.swift</source>
+<document_content>
+//
+//  DonnaUITestsLaunchTests.swift
+//  DonnaUITests
+//
+//  Created by William Wagner on 6/14/25.
+//
+
+import XCTest
+
+final class DonnaUITestsLaunchTests: XCTestCase {
+
+    override class var runsForEachTargetApplicationUIConfiguration: Bool {
+        true
+    }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    @MainActor
+    func testLaunch() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        // Insert steps here to perform after app launch but before taking a screenshot,
+        // such as logging into a test account or navigating somewhere in the app
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Launch Screen"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}
+
+</document_content>
+</document>
+<document index="8">
+<source>./Extensions/DonnaWidget/Sources/DonnaWidget.swift</source>
+<document_content>
+import ActivityKit
+import WidgetKit
+import SwiftUI
+import DonnaShared
+
+struct DonnaLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
+            VStack {
+                Image(systemName: "mic.fill")
+                Text(timerInterval: context.state.startTime ... .distantFuture)
+                    .monospacedDigit()
+            }
+            .padding()
+        } dynamicIsland: { _ in
+            DynamicIsland { } compactLeading: { Image(systemName: "mic") }
+                              compactTrailing: { }
+                              minimal: { Image(systemName: "mic") }
+        }
+    }
+}
+
+@main
+struct DonnaWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        DonnaLiveActivity()
+    }
+}
+</document_content>
+</document>
+<document index="9">
+<source>./Modules/DonnaCore/Sources/DonnaCore/AppDependencyManager.swift</source>
+<document_content>
+import Foundation
+
+/// Tiny resolver good enough for this demo.
+public final class AppDependencyManager {
+    public static let shared = AppDependencyManager()
+    private var factories: [ObjectIdentifier: () -> Any] = [:]
+
+    private init() {}
+
+    public func register<T>(_ type: T.Type, factory: @escaping () -> T) {
+        factories[ObjectIdentifier(type)] = factory
+    }
+
+    public func resolve<T>(_ type: T.Type = T.self) -> T {
+        guard let value = factories[ObjectIdentifier(type)]?() as? T else {
+            fatalError("No factory registered for \(type)")
+        }
+        return value
+    }
+}
+</document_content>
+</document>
+<document index="10">
+<source>./Modules/DonnaCore/Sources/DonnaCore/AudioRecorderManager.swift</source>
+<document_content>
+import AVFoundation
+import DonnaShared
+
+/// **Super‑naïve** implementation: one AVAudioRecorder at a time,
+/// direct CAF → M4A streaming omitted for brevity.
+public actor AudioRecorderManager: AudioRecordingService {
+
+    private var recorder: AVAudioRecorder?
+    private var token: SessionToken?
+
+    public init() {}
+
+    public func start() async throws -> SessionToken {
+        guard recorder == nil else { throw RecorderError.alreadyRunning }
+
+        let dir = FileManager.default.temporaryDirectory
+        let url = dir.appendingPathComponent(UUID().uuidString).appendingPathExtension("m4a")
+
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44_100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: 96_000
+        ]
+        recorder = try AVAudioRecorder(url: url, settings: settings)
+        recorder?.record()
+
+        let t = SessionToken()
+        token = t
+        return t
+    }
+
+    public func stop(_ token: SessionToken) async throws -> URL {
+        guard token == self.token, let recorder else {
+            throw RecorderError.invalidToken
+        }
+        recorder.stop()
+        self.recorder = nil
+        self.token = nil
+        return recorder.url
+    }
+}
+
+public enum RecorderError: Error { case alreadyRunning, invalidToken }
+</document_content>
+</document>
+<document index="11">
+<source>./Modules/DonnaIntents/Sources/AudioIntents.swift</source>
+<document_content>
+import AppIntents
+import DonnaShared
+import ActivityKit
+
+struct StartRecordingIntent: AudioRecordingIntent {
+    static let title: LocalizedStringResource = "Start Recording"
+    static var parameterSummary: some ParameterSummary {
+        Summary("Start a new recording in Donna")
+    }
+    
+    @Dependency var audioRecorder: AudioRecordingService
+    
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let token = try await audioRecorder.start()
+        
+        // Create Live Activity HERE, not in recorder
+        let activity = try Activity<RecordingActivityAttributes>.request(
+            attributes: RecordingActivityAttributes(sessionId: token.id),
+            contentState: RecordingActivityAttributes.ContentState(
+                startTime: Date(),
+                isPaused: false,
+                rms: []
+            )
+        )
+        
+        return .result(value: activity.id)
+    }
+}
+
+// Parameter-less stop intent for hardware triggers
+@MainActor
+struct StopCurrentRecordingIntent: AudioRecordingIntent {
+    static let title: LocalizedStringResource = "Stop Current Recording"
+    static var parameterSummary: some ParameterSummary {
+        Summary("Stop the current recording")
+    }
+    
+    @Dependency var audioRecorder: AudioRecordingService
+    
+    func perform() async throws -> some IntentResult & ShowsSnippetView {
+        if let recording = try await audioRecorder.stopCurrent() {
+            return .result() {
+                RecordingCompleteView(recording: recording)
+            }
+        } else {
+            return .result() {
+                Text("No active recording")
+            }
+        }
+    }
+}
+
+
+
+// Register shortcuts for discovery
+struct DonnaShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: StartRecordingIntent(),
+            phrases: [
+                "Start recording in \(.applicationName)",
+                "\(.applicationName) start recording"
+            ],
+            shortTitle: "Start Recording",
+            systemImageName: "mic.circle"
+        )
+        
+        // Parameter-less for hardware
+        AppShortcut(
+            intent: StopCurrentRecordingIntent(),
+            phrases: [
+                "Stop recording in \(.applicationName)",
+                "\(.applicationName) stop recording"
+            ],
+            shortTitle: "Stop Recording",
+            systemImageName: "stop.circle"
+        )
+    }
+}
+</document_content>
+</document>
+<document index="12">
+<source>./Modules/DonnaIntents/Sources/StopRecordingIntent.swift</source>
+<document_content>
+
+</document_content>
+</document>
+<document index="13">
+<source>./Modules/DonnaShared/Sources/DonnaShared/RecordingActivityAttributes.swift</source>
+<document_content>
+import ActivityKit
+
+public struct RecordingActivityAttributes: ActivityAttributes, Sendable {
+    public struct ContentState: Codable, Hashable {
+        public var startTime: Date
+    }
+    public init() {}
+}
+</document_content>
+</document>
+<document index="14">
+<source>./Modules/DonnaShared/Sources/DonnaShared/Types.swift</source>
+<document_content>
+// DonnaKit/Sources/DonnaKit/Protocols.swift
+import Foundation
+import ActivityKit
+
+/// Opaque handle returned by `AudioRecordingService.start()`.
+public struct SessionToken: Sendable, Hashable {
+    public let id: UUID
+    public init(id: UUID = .init()) { self.id = id }
+}
+
+/// Minimal protocol – more verbs later.
+public protocol AudioRecordingService: Sendable {
+    /// Starts a new recording and returns a token for stop/pause.
+    func start() async throws -> SessionToken
+    /// Stops the recording identified by `token` and returns the file URL.
+    func stop(_ token: SessionToken) async throws -> URL
+}
+</document_content>
+</document>
+<document index="15">
+<source>./Apps/DonnaApp.iOS/ContentView.swift</source>
+<document_content>
+import SwiftUI
+import DonnaShared
+
+struct ContentView: View {
+    @State private var token: SessionToken?
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Button("Start") {
+                Task {
+                    let recorder = AppDependencyManager.shared
+                        .resolve(AudioRecordingService.self)
+                    token = try? await recorder.start()
+                }
+            }
+            .disabled(token != nil)
+
+            Button("Stop") {
+                guard let token else { return }
+                Task {
+                    let recorder = AppDependencyManager.shared
+                        .resolve(AudioRecordingService.self)
+                    _ = try? await recorder.stop(token)
+                    self.token = nil
+                }
+            }
+            .disabled(token == nil)
+        }
+        .font(.title)
+        .padding()
+    }
+}
+</document_content>
+</document>
+<document index="16">
+<source>./Apps/DonnaApp.iOS/DonnaApp.swift</source>
+<document_content>
+import DonnaCore
+import DonnaShared
+
+@main
+struct DonnaApp: App {
+    init() {
+        AppDependencyManager.shared.register(AudioRecordingService.self) {
+            AudioRecorderManager()
+        }
+    }
+    // … default SwiftUI boilerplate …
+}
+</document_content>
+</document>
+<document index="17">
+<source>./Apps/DonnaApp.iOS/Info.plist</source>
+<document_content>
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Donna records audio locally on-device.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Used for on-device transcription; nothing leaves the device.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+    <key>NSSupportsLiveActivities</key>
+    <true/>
+    <key>NSSupportsLiveActivitiesFrequentUpdates</key>
+    <true/>      <!-- doubles the push budget to 8/15min -->
+    <key>UIApplicationSceneManifest</key>
+</dict>
+</plist>
+</document_content>
+</document>
+</documents>

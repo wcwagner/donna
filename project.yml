@@ -1,0 +1,22 @@
+name: Donna
+options:
+  bundleIdPrefix: com.williamwagner
+targets:
+  DonnaApp.iOS:
+    type: application
+    platform: iOS
+    sources: []           # all code comes from SwiftPM
+    info: Apps/DonnaApp.iOS/Info.plist
+    resources:
+      - Apps/DonnaApp.iOS/Assets.xcassets
+    entitlements: Apps/DonnaApp.iOS/DonnaApp.entitlements
+    dependencies:
+      - package: DonnaKit
+      - package: DonnaIntents
+  DonnaWidget:
+    type: app-extension
+    platform: iOS
+    sources: Extensions/DonnaWidget/Sources
+    info: Extensions/DonnaWidget/Info.plist
+    dependencies:
+      - package: DonnaKit
